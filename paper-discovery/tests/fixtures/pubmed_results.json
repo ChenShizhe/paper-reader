@@ -1,0 +1,37 @@
+[
+  {
+    "uid": "40221188",
+    "pmid": "pmid:40221188",
+    "title": "Cortical markers for early cognitive decline screening",
+    "authors": [
+      "Grace Kim",
+      "Henry Nakamura"
+    ],
+    "pubdate": "2024 May 03",
+    "abstract": "PubMed record for cortical markers in cognitive decline screening.",
+    "mesh_terms": [
+      "Cognitive Decline",
+      "Biomarkers"
+    ],
+    "citation_count": 5,
+    "references": [
+      "pmid:40330299"
+    ]
+  },
+  {
+    "uid": "40330299",
+    "pmid": "pubmed:40330299",
+    "title": "Registry analysis for cognitive triage protocols",
+    "authors": [
+      "Irene Cho"
+    ],
+    "pubdate": "2024 Jan",
+    "doi": "10.5678/example.2024.004",
+    "abstract": "Registry-based triage study for cognitive screening workflows.",
+    "mesh_terms": [
+      "Triage",
+      "Neurology"
+    ],
+    "citation_count": 0
+  }
+]

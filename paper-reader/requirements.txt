@@ -1,0 +1,19 @@
+# Core config and schema dependencies
+PyYAML>=6.0
+pydantic>=2.6
+
+# LLM client used by reader workers
+anthropic>=0.34.0
+
+# Bibliography validation and parsing
+bibtexparser>=1.4.0
+
+# PDF extraction stack
+PyMuPDF>=1.24.0
+pymupdf4llm>=0.0.11
+
+# Optional structured-PDF extraction backend (v2)
+mineru>=2.0.0
+
+# MCP framework for Zotero sync integration
+fastmcp

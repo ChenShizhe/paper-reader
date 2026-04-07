@@ -1,0 +1,97 @@
+# Paper Reader Script Index
+
+This index lists every Python script under `skills/paper-reader/scripts/`, including scripts in subdirectories.
+
+- `acquire_sources.py`: Python pipeline script for acquire sources.
+- `assumption_writer.py`: Python pipeline script for assumption writer.
+- `author_note_writer.py`: Python pipeline script for author note writer.
+- `build_catalog.py`: Python pipeline script for build catalog.
+- `build_summary_layers.py`: Python pipeline script for build summary layers.
+- `build_theorem_index.py`: Python pipeline script for build theorem index.
+- `catalog/__init__.py`: Python pipeline script for   init  .
+- `catalog/build_catalog.py`: Python pipeline script for build catalog.
+- `catalog/catalog_schema.py`: Python pipeline script for catalog schema.
+- `catalog/render_catalog.py`: Python pipeline script for render catalog.
+- `cite_key_resolver.py`: Python pipeline script for cite key resolver.
+- `claim_verifier.py`: Python pipeline script for claim verifier.
+- `comprehend_empirical.py`: Python pipeline script for comprehend empirical.
+- `comprehend_intro.py`: Python pipeline script for comprehend intro.
+- `comprehend_paper.py`: Python pipeline script for comprehend paper.
+- `comprehend_technical.py`: Python pipeline script for comprehend technical.
+- `context_loader.py`: Python pipeline script for context loader.
+- `convergence_rate_extractor.py`: Python pipeline script for convergence rate extractor.
+- `discussion_reader.py`: Python pipeline script for discussion reader.
+- `dummy_note_writer.py`: Python pipeline script for dummy note writer.
+- `expand_macros.py`: Python pipeline script for expand macros.
+- `format_theorems.py`: Python pipeline script for format theorems.
+- `gap_consolidator.py`: Python pipeline script for gap consolidator.
+- `generate_bibtex.py`: Python pipeline script for generate bibtex.
+- `identity.py`: Python pipeline script for identity.
+- `intro_positioner.py`: Python pipeline script for intro positioner.
+- `intro_reader.py`: Python pipeline script for intro reader.
+- `manage_paper_bank.py`: Python pipeline script for manage paper bank.
+- `merge_small_segments.py`: Python pipeline script for merge small segments.
+- `meta_note_query.py`: Python pipeline script for meta note query.
+- `method_reader.py`: Python pipeline script for method reader.
+- `model_reader.py`: Python pipeline script for model reader.
+- `notation_extractor.py`: Python pipeline script for notation extractor.
+- `number_equations.py`: Python pipeline script for number equations.
+- `preflight_extraction.py`: Python pipeline script for preflight extraction.
+- `real_data_reader.py`: Python pipeline script for real data reader.
+- `ref_resolver.py`: Python pipeline script for ref resolver.
+- `render_note_from_claims.py`: Python pipeline script for render note from claims.
+- `reseg_catalog_update.py`: Python pipeline script for reseg catalog update.
+- `reseg_merge.py`: Python pipeline script for reseg merge.
+- `reseg_rebalance.py`: Python pipeline script for reseg rebalance.
+- `reseg_split.py`: Python pipeline script for reseg split.
+- `reseg_trigger_scanner.py`: Python pipeline script for reseg trigger scanner.
+- `reseg_xref_updater.py`: Python pipeline script for reseg xref updater.
+- `resegment_paper.py`: Python pipeline script for resegment paper.
+- `run_pipeline.py`: Python pipeline script for run pipeline.
+- `segment_paper.py`: Python pipeline script for segment paper.
+- `segment_utils.py`: Python pipeline script for segment utils.
+- `segmenters/__init__.py`: Python pipeline script for   init  .
+- `segmenters/html_segmenter.py`: Python pipeline script for html segmenter.
+- `segmenters/latex_segmenter.py`: Python pipeline script for latex segmenter.
+- `segmenters/markdown_segmenter.py`: Python pipeline script for markdown segmenter.
+- `segmenters/pdf_segmenter.py`: Python pipeline script for pdf segmenter.
+- `self_improvement/__init__.py`: Python pipeline script for   init  .
+- `self_improvement/enforce_constitution_cap.py`: Python pipeline script for enforce constitution cap.
+- `self_improvement/level1_faithfulness.py`: Python pipeline script for level1 faithfulness.
+- `self_improvement/level2_session_learning.py`: Python pipeline script for level2 session learning.
+- `self_improvement/level3_meta_analysis.py`: Python pipeline script for level3 meta analysis.
+- `self_improvement/self_improve.py`: Python pipeline script for self improve.
+- `self_improvement/write_feedback_logs.py`: Python pipeline script for write feedback logs.
+- `simulation_reader.py`: Python pipeline script for simulation reader.
+- `subagent_contracts.py`: Python pipeline script for subagent contracts.
+- `summary_polish/__init__.py`: Python pipeline script for   init  .
+- `summary_polish/build_section_map.py`: Python pipeline script for build section map.
+- `summary_polish/build_summary_layers.py`: Python pipeline script for build summary layers.
+- `summary_polish/extract_reading_queue.py`: Python pipeline script for extract reading queue.
+- `summary_polish/generate_summary_quiz.py`: Python pipeline script for generate summary quiz.
+- `summary_polish/inject_feedback_form.py`: Python pipeline script for inject feedback form.
+- `summary_polish/promote_section_status.py`: Python pipeline script for promote section status.
+- `summary_polish/render_summary_note.py`: Python pipeline script for render summary note.
+- `summary_polish/run_faithfulness_check.py`: Python pipeline script for run faithfulness check.
+- `sync_zotero.py`: Python pipeline script for sync zotero.
+- `theory_reader.py`: Python pipeline script for theory reader.
+- `translate_paper.py`: Python pipeline script for translate paper.
+- `translation_utils.py`: Python pipeline script for translation utils.
+- `translators/__init__.py`: Python pipeline script for   init  .
+- `translators/html_translator.py`: Python pipeline script for html translator.
+- `translators/pdf_translator.py`: Python pipeline script for pdf translator.
+- `validate_extraction.py`: Python pipeline script for validate extraction.
+- `vault_integration/__init__.py`: Python pipeline script for   init  .
+- `vault_integration/build_vault_write_requests.py`: Python pipeline script for build vault write requests.
+- `vault_integration/prepare_assumption_notes.py`: Python pipeline script for prepare assumption notes.
+- `vault_integration/prepare_comparison_notes.py`: Python pipeline script for prepare comparison notes.
+- `vault_integration/prepare_concept_notes.py`: Python pipeline script for prepare concept notes.
+- `vault_integration/prepare_paper_note.py`: Python pipeline script for prepare paper note.
+- `vault_integration/prepare_proof_pattern_notes.py`: Python pipeline script for prepare proof pattern notes.
+- `vault_integration/prepare_stub_upgrades.py`: Python pipeline script for prepare stub upgrades.
+- `vault_integration/run_vault_ingestion.py`: Python pipeline script for run vault ingestion.
+- `vault_integration/search_vault.py`: Python pipeline script for search vault.
+- `vault_integration/update_vault_links.py`: Python pipeline script for update vault links.
+- `vault_integration/verify_claims.py`: Python pipeline script for verify claims.
+- `xref_tech_writer.py`: Python pipeline script for xref tech writer.
+- `xref_writer.py`: Python pipeline script for xref writer.

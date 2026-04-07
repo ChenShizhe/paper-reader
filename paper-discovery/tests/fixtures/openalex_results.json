@@ -1,0 +1,141 @@
+{
+  "results": [
+    {
+      "id": "https://openalex.org/W7700005678",
+      "doi": "https://doi.org/10.1234/5678-9012/24/3/0451",
+      "title": "Neural methods for time series forecasting",
+      "authorships": [
+        {
+          "author": {
+            "display_name": "Alice Zhang"
+          }
+        },
+        {
+          "author": {
+            "display_name": "Bob Johnson"
+          }
+        },
+        {
+          "author": {
+            "display_name": "Carol Williams"
+          }
+        }
+      ],
+      "publication_year": 2024,
+      "abstract_inverted_index": {
+        "Survey": [
+          0
+        ],
+        "of": [
+          1
+        ],
+        "neural": [
+          2
+        ],
+        "methods": [
+          3
+        ],
+        "for": [
+          4
+        ],
+        "forecasting": [
+          5
+        ]
+      },
+      "cited_by_count": 321,
+      "ids": {
+        "openalex": "https://openalex.org/W7700005678",
+        "doi": "https://doi.org/10.1234/5678-9012/24/3/0451",
+        "arxiv": "https://arxiv.org/abs/2401.12345v2"
+      },
+      "referenced_works": [
+        "https://openalex.org/W8800001234"
+      ],
+      "best_oa_location": {
+        "pdf_url": "https://arxiv.org/pdf/2401.12345.pdf"
+      },
+      "concepts": [
+        {
+          "display_name": "Machine Learning"
+        },
+        {
+          "display_name": "Time Series"
+        }
+      ]
+    },
+    {
+      "id": "https://openalex.org/W6600009999",
+      "doi": "https://doi.org/10.5678/example.2024.002",
+      "title": "Neural Methods for Anomaly Detection in Streams",
+      "authorships": [
+        {
+          "author": {
+            "display_name": "Alice Zhang"
+          }
+        },
+        {
+          "author": {
+            "display_name": "Frank Rivera"
+          }
+        }
+      ],
+      "publication_year": 2024,
+      "abstract": "Applies neural architectures to anomaly detection in streaming data.",
+      "cited_by_count": 12,
+      "ids": {
+        "openalex": "https://openalex.org/W6600009999",
+        "doi": "https://doi.org/10.5678/example.2024.002"
+      },
+      "referenced_works": [
+        "https://openalex.org/W7700005678"
+      ],
+      "concepts": [
+        {
+          "display_name": "Anomaly Detection"
+        },
+        {
+          "display_name": "Time Series"
+        }
+      ]
+    },
+    {
+      "id": "https://openalex.org/W8800001234",
+      "doi": "https://doi.org/10.9012/example.2024.003",
+      "title": "Graph representation learning: methods, applications, and evaluation",
+      "authorships": [
+        {
+          "author": {
+            "display_name": "David Park"
+          }
+        },
+        {
+          "author": {
+            "display_name": "Elena Torres"
+          }
+        }
+      ],
+      "publication_year": 2024,
+      "abstract": "Review article on graph representation learning techniques and benchmarks.",
+      "cited_by_count": 45,
+      "ids": {
+        "openalex": "https://openalex.org/W8800001234",
+        "doi": "https://doi.org/10.9012/example.2024.003",
+        "arxiv": "https://arxiv.org/abs/2403.67890v1"
+      },
+      "referenced_works": [
+        "https://openalex.org/W7700005678"
+      ],
+      "best_oa_location": {
+        "pdf_url": "https://arxiv.org/pdf/2403.67890.pdf"
+      },
+      "concepts": [
+        {
+          "display_name": "Graph Learning"
+        },
+        {
+          "display_name": "Representation Learning"
+        }
+      ]
+    }
+  ]
+}

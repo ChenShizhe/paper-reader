@@ -1,0 +1,30 @@
+[
+  {
+    "id": "XYZW5678",
+    "item_key": "XYZW5678",
+    "title": "Neural Methods for Time Series Forecasting",
+    "authors": [
+      "Alice Zhang",
+      "Bob Johnson",
+      "Carol Williams"
+    ],
+    "year": 2024,
+    "abstract": "Survey of neural network approaches for time series prediction tasks.",
+    "doi": "10.1234/5678-9012/24/3/0451",
+    "arxiv_id": "2401.12345",
+    "pmid": null,
+    "pdf_url": "https://arxiv.org/pdf/2401.12345.pdf",
+    "categories": [
+      "Machine Learning",
+      "Time Series"
+    ],
+    "zotero_url": "zotero://select/items/XYZW5678",
+    "cite_key": "zhang2024methods_zot",
+    "collection_keys": [
+      "COLLTEST1"
+    ],
+    "source_query": "neural methods",
+    "search_mode": "keyword",
+    "search_source": "zotero"
+  }
+]
