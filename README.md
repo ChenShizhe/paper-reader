@@ -2,6 +2,18 @@
 
 A literature pipeline for AI agents: discover papers, read them deeply, and coordinate batch reading sessions.
 
+## Quick Start (new machine)
+
+```bash
+git clone https://github.com/ChenShizhe/paper-reader.git
+cd paper-reader
+python3 -m pip install -r paper-reader/requirements.txt
+mkdir -p ~/Documents/paper-bank ~/Documents/citadel ~/.research-workdir
+python3 paper-discovery/scripts/preflight_discovery.py
+```
+
+**Done:** Preflight shows `OK` for arXiv and OpenAlex. No API keys needed for core functionality. See [SETUP.md](SETUP.md) for the full walkthrough including Zotero setup and cross-platform notes.
+
 ## Skills included
 
 | Skill | Purpose |

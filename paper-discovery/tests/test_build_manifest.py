@@ -85,7 +85,7 @@ class BuildManifestTest(unittest.TestCase):
         self.assertIn("zhang2024methods", cite_keys)
 
         manual_entry = next(entry for entry in manifest["entries"] if entry["canonical_id"].startswith("manual:"))
-        self.assertEqual(manual_entry["cite_key"], "chen2024attention")
+        self.assertEqual(manual_entry["cite_key"], "morgan2024attention")
         self.assertIsNone(manual_entry["arxiv_id"])
         self.assertIsNone(manual_entry["doi"])
         self.assertIsNone(manual_entry["openalex_id"])
