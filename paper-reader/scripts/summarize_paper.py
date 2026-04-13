@@ -449,14 +449,87 @@ def _build_gaps_section(cite_key: str, gaps_content: str) -> str:
 # ─── Frontmatter (schema v2) ──────────────────────────────────────────────────
 
 
+def _load_author_keywords(paper_bank_paper_dir: Path) -> list[str]:
+    """Load author keywords from author_keywords.txt in the paper-bank dir."""
+    kw_path = paper_bank_paper_dir / "author_keywords.txt"
+    if not kw_path.exists():
+        return []
+    return [line.strip() for line in kw_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _extract_methods_from_notes(note_contents: dict[str, str]) -> list[str]:
+    """Extract key methods from model.md and method.md reading notes.
+
+    Looks for a '## Key Methods' section and collects bullet items.
+    """
+    methods: list[str] = []
+    seen: set[str] = set()
+    for note_name in ("model", "method"):
+        content = note_contents.get(note_name, "")
+        if not content:
+            continue
+        # Find ## Key Methods section
+        match = re.search(r'^## Key Methods\s*\n(.*?)(?=\n##|\Z)', content, re.MULTILINE | re.DOTALL)
+        if not match:
+            continue
+        for line in match.group(1).splitlines():
+            m = re.match(r'^[-*+]\s+(.+)$', line.strip())
+            if m:
+                method_name = m.group(1).strip()
+                if method_name.lower() not in seen:
+                    seen.add(method_name.lower())
+                    methods.append(method_name)
+    return methods
+
+
+def _build_tldr_summary(
+    catalog: dict[str, Any],
+    note_contents: dict[str, str],
+) -> str:
+    """Build a one-to-two sentence TL;DR summary from section notes.
+
+    Synthesized from intro and model/method notes, not a paraphrase of the
+    abstract. Falls back to abstract if section notes are insufficient.
+    """
+    paper = catalog.get("paper") if isinstance(catalog, dict) else {}
+    if not isinstance(paper, dict):
+        paper = {}
+
+    # Gather key contribution sentences from intro
+    intro_body = _strip_frontmatter(note_contents.get("intro", ""))
+    intro_points = _extract_key_points(intro_body, limit=2)
+
+    # Gather method context
+    model_body = _strip_frontmatter(note_contents.get("model", ""))
+    model_points = _extract_key_points(model_body, limit=1)
+
+    combined = intro_points + model_points
+    if combined:
+        return " ".join(combined[:2])
+
+    # Fallback to abstract from catalog
+    abstract = _clean(paper.get("abstract") or catalog.get("abstract") or "")
+    if abstract:
+        # Take first two sentences
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', abstract) if s.strip()]
+        return " ".join(sentences[:2])
+
+    title = _clean(paper.get("title") or catalog.get("title") or "")
+    return f"This paper presents work on: {title}." if title else ""
+
+
 def _build_frontmatter(
     cite_key: str,
     catalog: dict[str, Any],
     generated_at: str,
+    author_keywords: list[str] | None = None,
+    summary: str = "",
+    methods: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build schema v2 YAML frontmatter for the literature note.
 
     Field set is compatible with knowledge-maester ingest_paper.py schema v2.
+    Includes additive fields: author_keywords, summary, methods.
     """
     paper = catalog.get("paper") if isinstance(catalog, dict) else {}
     if not isinstance(paper, dict):
@@ -472,7 +545,7 @@ def _build_frontmatter(
     )
     today = generated_at[:10]  # ISO date only
 
-    return {
+    fm: dict[str, Any] = {
         "type": "paper",
         "schema_version": "2",
         "cite_key": cite_key,
@@ -496,6 +569,16 @@ def _build_frontmatter(
         "auto_block_hash": "",
     }
 
+    # Additive fields — only included when non-empty
+    if author_keywords:
+        fm["author_keywords"] = author_keywords
+    if summary:
+        fm["summary"] = summary
+    if methods:
+        fm["methods"] = methods
+
+    return fm
+
 
 # ─── Note renderer ────────────────────────────────────────────────────────────
 
@@ -507,6 +590,8 @@ def _render_note(
     notation_dict: Any,
     generated_at: str,
     theorem_index: list[dict[str, Any]] | None = None,
+    author_keywords: list[str] | None = None,
+    methods: list[str] | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Render the full two-level literature note as Markdown.
 
@@ -524,8 +609,16 @@ def _render_note(
         paper = {}
     title = _clean(paper.get("title") or catalog.get("title") or cite_key)
 
+    # Build TL;DR summary from section notes
+    tldr_summary = _build_tldr_summary(catalog, note_contents)
+
     # Frontmatter dict — auto_block_hash is filled in after the body is assembled.
-    fm = _build_frontmatter(cite_key, catalog, generated_at)
+    fm = _build_frontmatter(
+        cite_key, catalog, generated_at,
+        author_keywords=author_keywords,
+        summary=tldr_summary,
+        methods=methods,
+    )
 
     # ── Step 1: Build section-by-section detailed summary ─────────────────────
     # Sections are assembled before the opening summary so that level1 can
@@ -731,6 +824,10 @@ def summarize_paper(
         if isinstance(candidates, list):
             theorem_index = candidates
 
+    # Load additive extraction fields
+    author_keywords = _load_author_keywords(paper_bank_paper_dir)
+    methods = _extract_methods_from_notes(note_contents)
+
     generated_at = datetime.now(tz=timezone.utc).isoformat()
 
     # ── Render & write ────────────────────────────────────────────────────────
@@ -741,6 +838,8 @@ def summarize_paper(
         notation_dict=notation_dict,
         generated_at=generated_at,
         theorem_index=theorem_index,
+        author_keywords=author_keywords,
+        methods=methods,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -755,6 +755,43 @@ def _write_translation_manifest(
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _extract_author_keywords(markdown: str) -> list[str]:
+    """Extract author-provided keywords from translated markdown text.
+
+    Scans for common keyword section patterns: "Keywords:", "Key words:",
+    "Key Words:", "KEYWORDS:", etc.  Returns a list of keyword strings,
+    or an empty list when none are found.
+    """
+    # Match lines like "Keywords: foo, bar, baz" or "Key words: ..."
+    pattern = re.compile(
+        r'(?:^|\n)\s*(?:\*{0,2})(?:Key\s*words?|KEYWORDS?)\s*(?:\*{0,2})\s*[:\-—]\s*(.+)',
+        re.IGNORECASE,
+    )
+    match = pattern.search(markdown)
+    if not match:
+        return []
+    raw = match.group(1).strip()
+    # Keywords may span multiple lines until next section heading or blank line.
+    # For safety, take only the first line's worth.
+    raw = raw.split("\n")[0].strip().rstrip(".")
+    # Split on common delimiters: semicolons, commas, or middots
+    parts = re.split(r'[;,·]', raw)
+    keywords = [kw.strip().strip("*").strip() for kw in parts if kw.strip().strip("*").strip()]
+    return keywords
+
+
+def _write_author_keywords(paper_bank_dir: Path, keywords: list[str]) -> Path | None:
+    """Write extracted author keywords to author_keywords.txt in the paper-bank dir.
+
+    Returns the path written, or None if keywords list is empty.
+    """
+    if not keywords:
+        return None
+    out_path = paper_bank_dir / "author_keywords.txt"
+    out_path.write_text("\n".join(keywords) + "\n", encoding="utf-8")
+    return out_path
+
+
 def _finalize_translation_artifacts(
     *,
     cite_key: str,
@@ -766,6 +803,12 @@ def _finalize_translation_artifacts(
     custom_macros_expanded: list[str] | None = None,
 ) -> dict[str, object]:
     markdown = translated_markdown_path.read_text(encoding="utf-8", errors="replace")
+
+    # Extract author-provided keywords from the translated text.
+    author_keywords = _extract_author_keywords(markdown)
+    kw_path = _write_author_keywords(paper_bank_dir, author_keywords)
+    if kw_path:
+        print(f"[translate_paper] author keywords extracted ({len(author_keywords)}): {kw_path}", file=sys.stderr)
 
     equation_count = _count_equations(markdown)
     section_count = _count_sections(markdown)

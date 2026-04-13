@@ -72,6 +72,7 @@ survey drafting.
 - `<PAPER_BANK>/<cite_key>/_translation_manifest.json`
 - `<PAPER_BANK>/<cite_key>/segments/_index.json` and `seg-*.md`
 - `<PAPER_BANK>/<cite_key>/notation_dict.yaml`
+- `<PAPER_BANK>/<cite_key>/author_keywords.txt` — author-provided keywords extracted during translation
 - `<PAPER_BANK>/<cite_key>/_vault-write-requests.json`
 - `<PAPER_BANK>/_manifest.json`
 - `<WORK_ROOT>/preflight_report.json`
@@ -266,6 +267,9 @@ python3 skills/paper-reader/scripts/manage_paper_bank.py \
 ### Step 3 — Translate paper to structured markdown
 
 Convert the best available source to a unified markdown representation.
+After translation, scan the translated text for "Keywords:" or "Key words:"
+sections and extract author-provided keywords to
+`<PAPER_BANK>/<cite_key>/author_keywords.txt`.
 
 ```bash
 python3 skills/paper-reader/scripts/translate_paper.py \
@@ -275,7 +279,8 @@ python3 skills/paper-reader/scripts/translate_paper.py \
 ```
 
 **Output:** `translated_full.md`, `_translation_manifest.json`,
-`_translation_warnings.log`, `_theorem_index.json`.
+`_translation_warnings.log`, `_theorem_index.json`, `author_keywords.txt`
+(when keywords are found in the source).
 
 ### Step 4 — Segment paper
 
@@ -316,9 +321,12 @@ and notation segments, guided by SKILL.md + `reading-constitution.md` + relevant
 domain meta-notes (Layer B, up to 3 per section type).
 
 The subagent writes comprehension notes directly to Citadel with `status: draft`.
+The intro subagent explicitly notes the paper's self-identified keywords and
+contribution areas: it lists author-provided keywords verbatim under an
+`## Author Keywords` heading in `intro.md`.
 
 **Output:**
-- `citadel/papers/<cite_key>/intro.md`
+- `citadel/papers/<cite_key>/intro.md` (includes `## Author Keywords` section)
 - `citadel/papers/<cite_key>/notation.md`
 - Dummy reference stubs in Citadel with `status: stub`
 
@@ -328,9 +336,13 @@ Spawn the technical subagent. Reads model, method, theory, and proof segments.
 Extracts formal equations, parameter spaces, estimation procedures, algorithm
 descriptions, convergence rates, and proof strategies.
 
+The model and method subagents identify key methods used in the paper. Each
+lists the primary statistical or computational methods under a `## Key Methods`
+heading in `model.md` and `method.md` respectively.
+
 **Output:**
-- `citadel/papers/<cite_key>/model.md`
-- `citadel/papers/<cite_key>/method.md`
+- `citadel/papers/<cite_key>/model.md` (includes `## Key Methods` section)
+- `citadel/papers/<cite_key>/method.md` (includes `## Key Methods` section)
 - `citadel/papers/<cite_key>/theory.md`
 - `citadel/papers/<cite_key>/proofs.md`
 - `paper-bank/<cite_key>/notation_dict.yaml` (extended with new symbols)
@@ -387,6 +399,12 @@ Synthesize per-section draft notes into a final literature note. Polish each
 per-section note in place (status: draft → reviewed). Run quiz and faithfulness
 checks.
 
+The summary note frontmatter includes three additive fields (when data is
+available):
+- `author_keywords`: list sourced from `author_keywords.txt` or `intro.md`
+- `summary`: one-to-two sentence TL;DR synthesized from section notes
+- `methods`: list of key methods collected from `model.md`/`method.md`
+
 ```bash
 python3 skills/paper-reader/scripts/summarize_paper.py \
   --cite-key "<cite_key>" \
@@ -395,7 +413,7 @@ python3 skills/paper-reader/scripts/summarize_paper.py \
 ```
 
 **Output:**
-- `citadel/papers/<cite_key>.md` — final polished summary note
+- `citadel/papers/<cite_key>.md` — final polished summary note (with `author_keywords`, `summary`, `methods` in frontmatter)
 - `citadel/papers/<cite_key>/` — per-section notes polished in place
 - `citadel/literature/claims/<cite_key>.json` — v2 claims format
 - `citadel/literature/<cite_key>-catalog.md` — finalized
@@ -602,6 +620,27 @@ in `reading-constitution-proposals.md`.
 
 See `reading-constitution.md` for the current rule set and
 `reading-constitution-proposals.md` for pending proposals.
+
+## Summary Note Frontmatter Fields (additive)
+
+The final summary note (`<cite_key>.md`) includes three additive frontmatter
+fields introduced by the keyword/summary extraction pipeline. These fields
+are purely additive — papers read before this feature was added are
+unaffected (they have no `author_keywords`, `summary`, or `methods` fields,
+which is valid).
+
+| Field | Type | Source | Description |
+|-------|------|--------|-------------|
+| `author_keywords` | `list[str]` | `author_keywords.txt` (Step 3) or `intro.md` (Step 6) | Author-provided keywords extracted verbatim from the paper source |
+| `summary` | `str` | Synthesized (Step 11) | One-to-two sentence TL;DR synthesized from section notes |
+| `methods` | `list[str]` | `model.md` / `method.md` (Step 7) | Key statistical or computational methods identified during comprehension |
+| `controlled_keywords` | `list[str]` | Assigned downstream by knowledge-maester | Normalized taxonomy keywords — **not assigned by paper-reader**; added by `knowledge-maester/scripts/normalize_keywords.py` after ingestion |
+
+**Note:** `controlled_keywords` is documented here for completeness but is
+**not** written by paper-reader. It is assigned downstream by the
+knowledge-maester skill during post-ingestion keyword normalization. Paper-reader
+only extracts the raw `author_keywords`; controlled vocabulary mapping is a
+separate concern.
 
 ## Out Of Scope
 

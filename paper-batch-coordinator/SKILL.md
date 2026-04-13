@@ -130,7 +130,58 @@ Load `$SKILLS_ROOT/knowledge-maester/SKILL.md` (optional dependency — not incl
 3. Archive processed patch files (move to `$PAPER_BANK/rq-patches/applied/`).
 4. Report the count of entries added, updated, and skipped.
 
-After knowledge-maester confirms the merge, read `$PAPER_BANK/acquisition-list.md` and report batch completion counts by status (`read`, `downloaded`, `pending`, `rate-limited`, `manual-pending`). If any `manual-pending` rows exist, also read `$PAPER_BANK/manual-download-list.md` and list the papers that need manual retrieval.
+After knowledge-maester confirms the merge, run the post-read organization steps below, then read `$PAPER_BANK/acquisition-list.md` and report batch completion counts by status (`read`, `downloaded`, `pending`, `rate-limited`, `manual-pending`). If any `manual-pending` rows exist, also read `$PAPER_BANK/manual-download-list.md` and list the papers that need manual retrieval.
+
+#### Post-Read Organization Steps
+
+After all papers in the batch are ingested and rq-patches are merged, run the following three steps to normalize keywords, update the SQLite index, and regenerate catalog MOCs.
+
+**Error handling:** If any organization step fails, log the error and continue to the next step. Organization failures must **not** block batch completion — they are recoverable on the next run.
+
+**Step O-1: Keyword Normalization**
+
+Assign controlled keywords to all newly ingested papers that do not yet have them.
+
+```bash
+python3 knowledge-maester/scripts/normalize_keywords.py \
+  --vault-path $VAULT_ROOT \
+  --taxonomy taxonomy.yaml \
+  --synonym-map synonym_map.json \
+  --all-unclassified
+```
+
+- Matches author-provided keywords to canonical taxonomy terms via `synonym_map.json`.
+- Papers that cannot be classified are appended to `pending_terms.yaml` for manual review.
+- On failure: log the error; unclassified papers remain unclassified until the next run.
+
+**Step O-2: SQLite Index Update**
+
+Incrementally update the literature SQLite index with data from newly ingested papers.
+
+```bash
+python3 knowledge-maester/scripts/build_taxonomy_db.py \
+  --vault-path $VAULT_ROOT \
+  --taxonomy taxonomy.yaml \
+  --synonym-map synonym_map.json \
+  --incremental
+```
+
+- Updates `$VAULT_ROOT/literature/_index.db` with new papers, keywords, and relationships.
+- On failure: log the error; the next `--incremental` or full rebuild will recover the index.
+
+**Step O-3: Catalog MOC Regeneration**
+
+Regenerate all catalog Map-of-Content pages to reflect the updated index.
+
+```bash
+python3 knowledge-maester/scripts/generate_catalog_mocs.py \
+  --vault-path $VAULT_ROOT \
+  --db-path $VAULT_ROOT/literature/_index.db \
+  --all
+```
+
+- Writes per-keyword MOC pages to `$VAULT_ROOT/literature/_catalog/`.
+- On failure: log the error; stale MOCs remain in place (not destructive) and are refreshed on the next successful run.
 
 ## How to Load This Skill
 

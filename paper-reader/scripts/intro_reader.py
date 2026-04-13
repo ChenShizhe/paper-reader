@@ -59,8 +59,9 @@ DEFAULT_SKILL_ROOT = "skills/paper-reader"
 SECTION_INTRO_NOTES = "## Intro Notes"
 SECTION_CLAIMED_CONTRIBUTIONS = "## Claimed Contributions"
 SECTION_MOTIVATING_CHALLENGES = "## Motivating Challenges"
+SECTION_AUTHOR_KEYWORDS = "## Author Keywords"
 
-PLANNED_SECTIONS = [SECTION_INTRO_NOTES, SECTION_CLAIMED_CONTRIBUTIONS, SECTION_MOTIVATING_CHALLENGES]
+PLANNED_SECTIONS = [SECTION_INTRO_NOTES, SECTION_CLAIMED_CONTRIBUTIONS, SECTION_MOTIVATING_CHALLENGES, SECTION_AUTHOR_KEYWORDS]
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +245,10 @@ Synthesize across all blocks to produce:
    - Append `→ Challenge type: <empirical|theoretical|computational|other>`.
    - Append `→ Cross-check with: <section or methodology>`.
 
+3. List the paper's **author-provided keywords** verbatim under an `## Author Keywords` heading.
+   If the introduction or abstract contains a "Keywords:" or "Key words:" line, reproduce
+   those keywords exactly. If no author keywords are found, return an empty list.
+
 ## Output Format (JSON only, no prose)
 {{
   "contributions": [
@@ -258,7 +263,8 @@ Synthesize across all blocks to produce:
       "challenge_type": "<empirical|theoretical|computational|other>",
       "cross_check_with": "<section or methodology>"
     }}
-  ]
+  ],
+  "author_keywords": ["<keyword1>", "<keyword2>"]
 }}
 """
 
@@ -404,14 +410,29 @@ def _build_challenges_text(synthesis: dict) -> str:
     return "\n".join(lines)
 
 
+def _build_author_keywords_text(synthesis: dict) -> str:
+    """Render the ## Author Keywords section from synthesis output."""
+    lines = [SECTION_AUTHOR_KEYWORDS, ""]
+    keywords = synthesis.get("author_keywords", [])
+    if not keywords:
+        lines.append("*(No author-provided keywords found.)*")
+        lines.append("")
+    else:
+        for kw in keywords:
+            lines.append(f"- {kw}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _append_to_intro_md(
     vault_root: Path,
     cite_key: str,
     intro_notes_text: str,
     contributions_text: str,
     challenges_text: str,
+    author_keywords_text: str = "",
 ) -> Path:
-    """Append the three intro sections to intro.md without overwriting §Positioning.
+    """Append intro sections to intro.md without overwriting §Positioning.
 
     The parent directory is created if it does not exist.
     Returns the path to the intro.md file.
@@ -420,12 +441,15 @@ def _append_to_intro_md(
     note_dir.mkdir(parents=True, exist_ok=True)
     intro_path = note_dir / "intro.md"
 
-    append_block = "\n".join([
+    parts = [
         "",
         intro_notes_text,
         contributions_text,
         challenges_text,
-    ])
+    ]
+    if author_keywords_text:
+        parts.append(author_keywords_text)
+    append_block = "\n".join(parts)
 
     if intro_path.exists():
         existing = intro_path.read_text(encoding="utf-8")
@@ -596,6 +620,7 @@ def run_step42(
     intro_notes_text = _build_intro_notes_text(classified_blocks)
     contributions_text = _build_contributions_text(synthesis)
     challenges_text = _build_challenges_text(synthesis)
+    author_keywords_text = _build_author_keywords_text(synthesis)
 
     # 7. Append sections to intro.md (preserves §Positioning written by Task 01)
     _append_to_intro_md(
@@ -604,6 +629,7 @@ def run_step42(
         intro_notes_text=intro_notes_text,
         contributions_text=contributions_text,
         challenges_text=challenges_text,
+        author_keywords_text=author_keywords_text,
     )
 
     return {

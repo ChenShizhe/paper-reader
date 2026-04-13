@@ -208,6 +208,9 @@ Run the 6-step model extraction protocol on this model segment:
 5. Mark model→method boundary: where does the model specification end and method/algorithm begin?
 6. Collect new notation entries: symbols introduced in this segment not already in the notation dictionary.
    (Do NOT write notation_dict.yaml — return new entries here for the driver to merge.)
+7. List the primary statistical or computational methods used under a `## Key Methods` heading.
+   Return short canonical method names (e.g., "point process model", "Bayesian inference",
+   "kernel density estimation"). Include the paper's core modelling approach and any named frameworks.
 
 ## Output Format (JSON only, no prose)
 {{
@@ -232,7 +235,8 @@ Run the 6-step model extraction protocol on this model segment:
       "description": "<definition>",
       "first_defined_in": "<segment id>"
     }}
-  ]
+  ],
+  "key_methods": ["<method name 1>", "<method name 2>"]
 }}
 """
 
@@ -330,6 +334,22 @@ def _build_model_md(
         lines.append("")
 
         lines.append(f"*Segments: {', '.join(seg_ids) if seg_ids else 'N/A'}*")
+        lines.append("")
+
+    # Aggregate key methods across all sections
+    all_key_methods: list[str] = []
+    seen_methods: set[str] = set()
+    for result in extraction_results:
+        for m in result.get("key_methods", []):
+            m_lower = m.strip().lower()
+            if m_lower and m_lower not in seen_methods:
+                seen_methods.add(m_lower)
+                all_key_methods.append(m.strip())
+    if all_key_methods:
+        lines.append("## Key Methods")
+        lines.append("")
+        for m in all_key_methods:
+            lines.append(f"- {m}")
         lines.append("")
 
     return "\n".join(lines)
@@ -481,6 +501,16 @@ def run_model_reading(
         if boundary and boundary not in ("N/A", "(requires manual review)"):
             model_method_boundary_notes.append(f"[{segment_label}] {boundary}")
 
+    # Collect key methods across all sections (deduplicated, case-insensitive)
+    all_key_methods: list[str] = []
+    seen_methods: set[str] = set()
+    for result in extraction_results:
+        for m in result.get("key_methods", []):
+            m_lower = m.strip().lower()
+            if m_lower and m_lower not in seen_methods:
+                seen_methods.add(m_lower)
+                all_key_methods.append(m.strip())
+
     # Deduplicate contributions_verified
     seen_cv: set[str] = set()
     unique_contributions_verified: list[str] = []
@@ -508,6 +538,7 @@ def run_model_reading(
         "contributions_verified": unique_contributions_verified,
         "model_method_boundary": "; ".join(model_method_boundary_notes) or "N/A",
         "notation_entries_new": all_notation_new,
+        "key_methods": all_key_methods,
         "model_segments_used": all_segment_ids,
     }
     output_json_full_path = paper_dir / OUTPUT_JSON_NAME
@@ -540,6 +571,7 @@ def run_model_reading(
         "contributions_verified": unique_contributions_verified,
         "model_method_boundary": "; ".join(model_method_boundary_notes) or "N/A",
         "notation_entries_new": all_notation_new,
+        "key_methods": all_key_methods,
         "model_segments_used": all_segment_ids,
         "model_artifacts_produced": model_artifacts_produced,
     }
