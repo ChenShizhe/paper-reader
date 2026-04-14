@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Literal
@@ -210,14 +211,12 @@ def _dry_run(args: argparse.Namespace) -> int:
 
 
 def _live_run(args: argparse.Namespace) -> int:
-    """Execute the live (stub) orchestration path; return exit code."""
+    """Execute the live orchestration path — call section readers inline."""
     paper_bank_root = Path(os.path.expanduser(args.paper_bank_root))
     cite_key = args.cite_key
     paper_dir = paper_bank_root / cite_key
-    if args.constitution_path:
-        constitution_path = Path(os.path.expanduser(args.constitution_path))
-    else:
-        constitution_path = Path(os.path.expanduser(args.skill_root)) / "reading-constitution.md"
+    skill_root = Path(os.path.expanduser(args.skill_root))
+    vault_root = os.path.expanduser(args.vault_root)
     llm_dispatch, dispatch_source = _resolve_llm_dispatch(args.llm_dispatch)
 
     snapshot_path = snapshot_catalog(paper_dir)
@@ -229,31 +228,131 @@ def _live_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    catalog_path = paper_dir / "_catalog.yaml"
+    if not catalog_path.exists():
+        print(f"Error: catalog not found at {catalog_path}", file=sys.stderr)
+        return 1
+
+    catalog = _load_catalog(catalog_path)
+    sections = catalog.get("sections", [])
+
+    # Determine which section types have pending comprehension work.
+    section_types_present: set[str] = set()
+    for section in sections:
+        status = section.get("comprehension_status")
+        if status not in (None, "pending"):
+            continue
+        section_types_present.add(section.get("section_type", "unknown"))
+
+    # Map section types to reader scripts.
+    _READER_MAP: dict[str, str] = {
+        "introduction": "intro_reader.py",
+        "model": "model_reader.py",
+        "model_method": "model_reader.py",
+        "model_theory": "model_reader.py",
+        "method": "method_reader.py",
+        "methods": "method_reader.py",
+        "method_theory": "method_reader.py",
+        "theory": "theory_reader.py",
+        "proof": "theory_reader.py",
+    }
+    _EMPIRICAL_TYPES = {"simulation", "real_data", "discussion"}
+
+    readers_to_run: list[str] = []
+    seen: set[str] = set()
+    for st in sorted(section_types_present):
+        if st in _READER_MAP:
+            script = _READER_MAP[st]
+        elif st in _EMPIRICAL_TYPES:
+            script = "comprehend_empirical.py"
+        else:
+            continue
+        if script not in seen:
+            readers_to_run.append(script)
+            seen.add(script)
+
+    if not readers_to_run:
+        print("No pending sections found for comprehension.", file=sys.stderr)
+        return 0
+
     if llm_dispatch == "subagent":
-        # Isolation note for Steps 6-8 of the comprehension flow:
-        # this orchestrator process is shared across those steps; only the
-        # per-section LLM work may fan out to separate subagents when
-        # `--llm-dispatch subagent` is selected. Because Steps 6-8 are not
-        # isolated into separate Python runtimes here, large combined state can
-        # accumulate and increase context-window pressure.
+        # Subagent mode: produce the dispatch plan JSON and exit.  The calling
+        # agent is expected to spawn subagents for each entry in the plan.
         print(
-            (
-                "Dispatch mode: subagent "
-                f"({dispatch_source}); constitution={constitution_path}; "
-                "subagent fan-out would run here."
-            ),
+            f"Dispatch mode: subagent ({dispatch_source}). "
+            "Producing dispatch plan — the calling agent must spawn readers.",
+            file=sys.stderr,
+        )
+        return _dry_run(args)
+
+    # Inline mode: call each reader as a subprocess.
+    print(
+        f"Comprehension: running {len(readers_to_run)} reader(s) inline for {cite_key}",
+        file=sys.stderr,
+    )
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print(
+            "WARNING: ANTHROPIC_API_KEY is not set. Section readers will use "
+            "fallback heuristics instead of LLM calls — comprehension quality "
+            "may be reduced.",
+            file=sys.stderr,
+        )
+
+    results: dict[str, str] = {}
+    failures: list[str] = []
+    for reader_script in readers_to_run:
+        script_path = _SCRIPTS_DIR / reader_script
+        if not script_path.exists():
+            print(f"  WARNING: reader script not found: {reader_script}", file=sys.stderr)
+            failures.append(reader_script)
+            continue
+
+        cmd = [
+            sys.executable, str(script_path),
+            "--cite-key", cite_key,
+            "--paper-bank-root", str(paper_bank_root),
+            "--vault-root", vault_root,
+            "--skill-root", str(skill_root),
+        ]
+
+        print(f"  Running {reader_script}...", file=sys.stderr)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode != 0:
+                print(
+                    f"  WARNING: {reader_script} exited with code {result.returncode}",
+                    file=sys.stderr,
+                )
+                if result.stderr:
+                    for line in result.stderr.strip().splitlines()[:5]:
+                        print(f"    {line}", file=sys.stderr)
+                failures.append(reader_script)
+            else:
+                print(f"  OK: {reader_script}", file=sys.stderr)
+                results[reader_script] = "passed"
+        except subprocess.TimeoutExpired:
+            print(f"  WARNING: {reader_script} timed out after 300s", file=sys.stderr)
+            failures.append(reader_script)
+        except Exception as exc:
+            print(f"  WARNING: {reader_script} failed: {exc}", file=sys.stderr)
+            failures.append(reader_script)
+
+    if failures:
+        print(
+            f"Comprehension completed with {len(failures)} failure(s): {failures}. "
+            "Pipeline will continue — downstream steps may produce partial results.",
             file=sys.stderr,
         )
     else:
         print(
-            (
-                "Dispatch mode: inline "
-                f"({dispatch_source}); constitution={constitution_path}; "
-                "main agent would run section readers inline."
-            ),
+            f"Comprehension completed successfully: {len(results)} reader(s) ran.",
             file=sys.stderr,
         )
-    print("Orchestrator: live dispatch not implemented in M4", file=sys.stderr)
+
+    # Always return 0 — comprehension failures are soft.  Downstream steps
+    # (prepare_paper_note) degrade gracefully when section notes are missing.
     return 0
 
 

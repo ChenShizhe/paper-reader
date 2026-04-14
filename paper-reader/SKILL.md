@@ -555,27 +555,54 @@ for I/O operations and spawning subagents for comprehension steps.
 - The reading plan embeds a subagent prompt for each comprehension phase so
   the plan is self-contained and resumable after interruption.
 
-**Comprehension subagent pattern:**
-- `comprehend_paper.py` is the comprehension orchestrator. It spawns per-section
-  subagents for Steps 6, 7, and 8.
-- Each subagent receives: shared Layer A context (SKILL.md + `reading-constitution.md`
-  + `proof-patterns.md` where relevant) + section-specific Layer B meta-notes
-  (up to 3 per subagent, queried from `citadel/literature/meta/`).
-- Each subagent writes its section note directly to Citadel with `status: draft`.
-- After each section note: the orchestrator runs a Reading Constitution self-critique
-  pass.
-- If the orchestrator detects a segment boundary issue: triggers `resegment_paper.py`
-  automatically (Step 9).
+**Comprehension execution modes:**
+
+`comprehend_paper.py` is the comprehension orchestrator for Steps 6, 7, and 8.
+It supports three modes:
+
+1. **Inline (default):** Calls section reader scripts (`intro_reader.py`,
+   `model_reader.py`, `method_reader.py`, `theory_reader.py`,
+   `comprehend_empirical.py`) as subprocesses in the same session.
+   Works end-to-end without spawning separate agent sessions. Quality depends
+   on whether `ANTHROPIC_API_KEY` is set — without it, readers fall back to
+   heuristic extraction.
+
+2. **Subagent:** Produces a dispatch plan JSON. The calling agent is expected
+   to spawn separate subagent sessions for each section, giving each one
+   focused context. Higher quality but requires multi-session orchestration.
+
+3. **Dry-run:** Plans dispatch without executing anything. Use `--dry-run`
+   to verify the dispatch plan.
 
 ```bash
-python3 skills/paper-reader/scripts/comprehend_paper.py \
+# Inline (default) — runs readers in-process:
+python3 scripts/comprehend_paper.py \
   --cite-key "<cite_key>" \
-  --segment-dir "<PAPER_BANK>/<cite_key>/segments/" \
-  --vault-root "<VAULT_ROOT>" \
-  --constitution "skills/paper-reader/reading-constitution.md"
+  --paper-bank-root "<PAPER_BANK>" \
+  --vault-root "<VAULT_ROOT>"
+
+# Subagent — produces plan for agent to dispatch:
+python3 scripts/comprehend_paper.py \
+  --cite-key "<cite_key>" \
+  --llm-dispatch subagent \
+  --paper-bank-root "<PAPER_BANK>" \
+  --vault-root "<VAULT_ROOT>"
 ```
 
-Use `--dry-run` to verify the dispatch plan without running subagents.
+**Graceful degradation:** If comprehension produces partial results (some
+readers fail or run without LLM), downstream steps (`prepare_paper_note.py`)
+write a vault note with `content_status: partial` and `review_status: draft`
+rather than failing. The note contains whatever content was extracted, with
+placeholders for missing sections.
+
+**Resuming after manual comprehension:** If you complete comprehension manually
+(e.g., wrote section notes by hand or via separate agent sessions), re-run the
+pipeline skipping earlier steps:
+
+```bash
+python3 scripts/run_pipeline.py --cite-key "<cite_key>" \
+  --resume-from vault_prepare
+```
 
 ## Operational Rules
 

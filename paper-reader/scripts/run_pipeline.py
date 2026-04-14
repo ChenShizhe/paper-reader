@@ -277,6 +277,14 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated step names to skip (e.g. 'vault,summarize').",
     )
     p.add_argument(
+        "--resume-from",
+        default="",
+        help=(
+            "Skip all steps before the named step (e.g. '--resume-from vault_prepare'). "
+            "Useful after manually completing the comprehension step."
+        ),
+    )
+    p.add_argument(
         "--checkpoint-path",
         default="checkpoint.json",
         help=(
@@ -691,6 +699,7 @@ def main() -> int:
     if not checkpoint_path.is_absolute():
         checkpoint_path = run_report_path.parent / checkpoint_path
     skip_steps: set[str] = {s.strip() for s in args.skip_steps.split(",") if s.strip()}
+    resume_from: str = args.resume_from.strip() if args.resume_from else ""
 
     # Supplement source detection (F-001) — scan source directory for multiple
     # PDFs / .tex files and classify them before any pipeline step runs.
@@ -747,7 +756,6 @@ def main() -> int:
         "--skill-root", str(skill_root),
         "--constitution-path", str(skill_root / "reading-constitution.md"),
         "--vault-root", str(vault_root),
-        "--dry-run",
     ]
     vault_requests_path = paper_bank / "_vault-write-requests.json"
     vault_cmd = [
@@ -969,6 +977,20 @@ def main() -> int:
         skip_steps.add("preflight")
 
     step_order: list[str] = [name for name, _, _ in steps]
+
+    # Apply --resume-from: skip all steps before the named step.
+    if resume_from:
+        if resume_from not in step_order:
+            print(
+                f"[run_pipeline] ERROR: --resume-from step {resume_from!r} not found. "
+                f"Available steps: {', '.join(step_order)}",
+                file=sys.stderr,
+            )
+            return 1
+        for name in step_order:
+            if name == resume_from:
+                break
+            skip_steps.add(name)
     checkpoint = _load_checkpoint(checkpoint_path)
     checkpoint_skips: set[str] = set()
     if checkpoint:

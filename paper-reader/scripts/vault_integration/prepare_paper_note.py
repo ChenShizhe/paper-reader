@@ -559,10 +559,28 @@ def prepare_paper_note(
     )
 
     if "[fallback:" in note_markdown:
-        raise RuntimeError(
-            f"Unresolved [fallback:] token detected in rendered vault note for cite_key={cite_key!r}. "
-            "Inspect the note-building pipeline: at least one data source returned a fallback placeholder "
-            "that was not resolved before output. Check contributions, summary, methodology, and knowledge-gaps sources."
+        print(
+            f"WARNING: Unresolved [fallback:] tokens in vault note for {cite_key!r}. "
+            "Some sections used catalog fallbacks or are unavailable because the "
+            "comprehension step did not produce full section notes. The note will "
+            "be written with content_status: partial.",
+            file=sys.stderr,
+        )
+        # Strip fallback tokens so the note is readable.
+        # [fallback: catalog] prefixes indicate lower-quality but real content — keep it.
+        note_markdown = re.sub(r"\[fallback: catalog\] ?", "", note_markdown)
+        # [fallback: unavailable] indicates missing content — replace with a clear marker.
+        note_markdown = re.sub(
+            r"\[fallback: unavailable\] [^\n]*",
+            "*Section not available — re-run the comprehension step to populate.*",
+            note_markdown,
+        )
+        # Mark the note as partial in frontmatter.
+        note_markdown = note_markdown.replace(
+            "content_status: full-text", "content_status: partial"
+        )
+        note_markdown = note_markdown.replace(
+            "review_status: reviewed", "review_status: draft"
         )
 
     sections_found = {
