@@ -244,19 +244,39 @@ def _live_run(args: argparse.Namespace) -> int:
             continue
         section_types_present.add(section.get("section_type", "unknown"))
 
-    # Map section types to reader scripts.
+    # Map section types to reader scripts.  Covers all known section_type
+    # values from the catalog schema plus common aliases.
     _READER_MAP: dict[str, str] = {
+        # Positioning / intro readers
         "introduction": "intro_reader.py",
+        "abstract": "intro_reader.py",
+        "background": "intro_reader.py",
+        "related_work": "intro_reader.py",
+        "literature_review": "intro_reader.py",
+        "preliminaries": "intro_reader.py",
+        # Model readers
         "model": "model_reader.py",
         "model_method": "model_reader.py",
         "model_theory": "model_reader.py",
+        "formulation": "model_reader.py",
+        # Method readers
         "method": "method_reader.py",
         "methods": "method_reader.py",
         "method_theory": "method_reader.py",
+        "algorithm": "method_reader.py",
+        "implementation": "method_reader.py",
+        # Theory readers
         "theory": "theory_reader.py",
         "proof": "theory_reader.py",
+        "analysis": "theory_reader.py",
+        "appendix": "theory_reader.py",
     }
-    _EMPIRICAL_TYPES = {"simulation", "real_data", "discussion"}
+    _EMPIRICAL_TYPES = {
+        "simulation", "real_data", "discussion", "conclusion",
+        "experiments", "results", "evaluation",
+    }
+    # Generic "section" type: skip silently — these are typically structural
+    # headings whose content is covered by more specific child sections.
 
     readers_to_run: list[str] = []
     seen: set[str] = set()

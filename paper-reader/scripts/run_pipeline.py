@@ -485,7 +485,16 @@ def _classify_sources(source_path: str) -> tuple[Path, Path | None, str]:
     scan_dir = src if src.is_dir() else src.parent
 
     pdfs = sorted(scan_dir.glob("*.pdf"))
-    tex_files = sorted(scan_dir.glob("*.tex"))
+    # Exclude macro-only .tex files (e.g. math_commands.tex, macros.tex) —
+    # these define LaTeX commands but are not standalone documents or supplements.
+    _MACRO_NAMES = {
+        "math_commands", "macros", "preamble", "defs", "commands",
+        "shortcuts", "notation", "header", "packages", "setup",
+    }
+    tex_files = sorted(
+        f for f in scan_dir.glob("*.tex")
+        if f.stem.lower() not in _MACRO_NAMES
+    )
     all_candidates = pdfs + tex_files
 
     if len(all_candidates) <= 1:
@@ -956,7 +965,7 @@ def main() -> int:
                 str(scripts / "summarize_paper.py"),
                 "--cite-key", cite_key,
                 "--paper-bank-dir", str(paper_bank),
-                "--vault-root", str(vault_root),
+                "--vault-path", str(vault_root),
             ],
             True,   # soft: summarize_paper.py is a future implementation target
         ),

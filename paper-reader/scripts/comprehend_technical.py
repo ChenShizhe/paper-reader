@@ -390,17 +390,6 @@ def _live_run(args: argparse.Namespace) -> int:
     model = args.model
     paper_dir = paper_bank_root / cite_key
 
-    # Pre-flight: inline dispatch requires ANTHROPIC_API_KEY
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print(
-            "Error: ANTHROPIC_API_KEY is not set in the environment.\n"
-            "  Inline dispatch calls the Anthropic SDK and requires a valid API key.\n"
-            "  Intended execution model: Claude Code acts as the comprehension engine.\n"
-            "  Suggestion: use --llm-dispatch subagent to generate a dispatch plan instead.",
-            file=sys.stderr,
-        )
-        return 1
-
     # Exit 1 with stderr when the paper directory doesn't exist
     if not paper_dir.exists():
         print(
@@ -705,9 +694,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default="inline",
         dest="llm_dispatch",
         help=(
-            "Dispatch mode. 'inline' calls the Anthropic SDK directly (requires ANTHROPIC_API_KEY). "
+            "Dispatch mode. 'inline' runs section reading in-process. "
             "'subagent' generates a structured dispatch plan JSON at "
-            "<paper-bank-dir>/<cite_key>/_dispatch_plan.json without calling the API."
+            "<paper-bank-dir>/<cite_key>/_dispatch_plan.json for agent-driven dispatch."
         ),
     )
     return parser

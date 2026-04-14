@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -43,12 +44,35 @@ def _parse_bool(value: Any) -> bool:
     raise argparse.ArgumentTypeError(f"Expected boolean value, got: {value!r}")
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+def _find_knowledge_maester_scripts() -> Path:
+    """Locate knowledge-maester scripts directory.
+
+    Resolution order:
+    1. KNOWLEDGE_MAESTER_ROOT env var
+    2. ~/.claude/skills/knowledge-maester/scripts/
+    3. ~/Documents/skills/memory-skill/knowledge-maester/scripts/
+    4. Relative path from this file (legacy monorepo layout)
+    """
+    env_root = os.environ.get("KNOWLEDGE_MAESTER_ROOT")
+    if env_root:
+        candidate = Path(env_root).expanduser() / "scripts"
+        if candidate.exists():
+            return candidate
+
+    for candidate_base in [
+        Path.home() / ".claude" / "skills" / "knowledge-maester",
+        Path.home() / "Documents" / "skills" / "memory-skill" / "knowledge-maester",
+    ]:
+        candidate = candidate_base / "scripts"
+        if candidate.exists():
+            return candidate
+
+    # Legacy fallback: monorepo layout
+    return Path(__file__).resolve().parents[4] / "skills" / "knowledge-maester" / "scripts"
 
 
 def _build_script_paths() -> dict[str, Path]:
-    base = _repo_root() / "skills" / "knowledge-maester" / "scripts"
+    base = _find_knowledge_maester_scripts()
     return {
         "preflight": base / "preflight_maester.py",
         "ingest": base / "ingest_paper.py",

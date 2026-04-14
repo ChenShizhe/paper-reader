@@ -483,6 +483,23 @@ def prepare_paper_note(
     if not isinstance(paper_meta, dict):
         paper_meta = {}
 
+    # Enrich paper_meta from translation manifest if catalog fields are empty.
+    # The translation manifest often has richer metadata (title, authors, year)
+    # that build_catalog.py may not have propagated.
+    translation_manifest_path = work_dir / "_translation_manifest.json"
+    if translation_manifest_path.exists():
+        try:
+            tm = json.loads(_read_text(translation_manifest_path))
+            if isinstance(tm, dict):
+                if not paper_meta.get("title") and tm.get("title"):
+                    paper_meta["title"] = tm["title"]
+                if not paper_meta.get("authors") and tm.get("authors"):
+                    paper_meta["authors"] = tm["authors"]
+                if not paper_meta.get("year") and tm.get("year"):
+                    paper_meta["year"] = tm["year"]
+        except (json.JSONDecodeError, OSError):
+            pass
+
     xref_index: dict = {}
     if xref_path.exists():
         try:
