@@ -77,13 +77,13 @@ def build_report() -> dict[str, object]:
         check_runtime_script(
             "search_zotero.py",
             script_root / "search_zotero.py",
-            True,
+            False,
             "Restore the discovery scripts directory before invoking Zotero search",
         ),
         check_path(
             "zotero-mcp-root",
             zotero_mcp_root,
-            True,
+            False,
             "Install Zotero MCP and set ZOTERO_MCP_ROOT, or install under ~/Documents/MCPs/zotero-mcp",
         ),
         check_tool(

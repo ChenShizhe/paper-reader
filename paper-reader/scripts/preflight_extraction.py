@@ -213,13 +213,13 @@ def build_report() -> dict[str, object]:
         check_runtime_script(
             "sync_zotero.py",
             script_root / "sync_zotero.py",
-            True,
+            False,
             "Restore paper-reader/scripts to include Zotero synchronization",
         ),
         check_path(
             "zotero-mcp-root",
             zotero_mcp_root,
-            True,
+            False,
             "Install Zotero MCP under $ZOTERO_MCP_ROOT or ~/Documents/MCPs/zotero-mcp",
         ),
         check_path(
