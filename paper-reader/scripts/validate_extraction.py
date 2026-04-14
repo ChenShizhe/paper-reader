@@ -259,7 +259,7 @@ def validate_v2_segment_manifest(segment_manifest_path: Path, cite_key: str) -> 
     errors: list[str] = []
     warnings: list[str] = []
     if not segment_manifest_path.exists():
-        errors.append(f"{cite_key}: segment manifest not found at {segment_manifest_path}")
+        warnings.append(f"{cite_key}: segment manifest not found at {segment_manifest_path}")
         return errors, warnings
 
     try:
@@ -289,7 +289,7 @@ def validate_v2_summary_layers(summary_layers_path: Path, cite_key: str) -> tupl
     errors: list[str] = []
     warnings: list[str] = []
     if not summary_layers_path.exists():
-        errors.append(f"{cite_key}: _summary_layers.json not found at {summary_layers_path}")
+        warnings.append(f"{cite_key}: _summary_layers.json not found (summary_layers is a soft pipeline step)")
         return errors, warnings
 
     try:

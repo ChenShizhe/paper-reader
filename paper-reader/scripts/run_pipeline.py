@@ -485,16 +485,26 @@ def _classify_sources(source_path: str) -> tuple[Path, Path | None, str]:
     scan_dir = src if src.is_dir() else src.parent
 
     pdfs = sorted(scan_dir.glob("*.pdf"))
-    # Exclude macro-only .tex files (e.g. math_commands.tex, macros.tex) —
-    # these define LaTeX commands but are not standalone documents or supplements.
-    _MACRO_NAMES = {
+    # Exclude non-document .tex files from supplement candidates:
+    # 1. Known macro/utility filenames (no \begin{document})
+    # 2. Known non-supplement types (posters, slides, cover letters)
+    # 3. Files without \begin{document} (macro-only or fragments)
+    _EXCLUDED_NAMES = {
         "math_commands", "macros", "preamble", "defs", "commands",
         "shortcuts", "notation", "header", "packages", "setup",
+        "poster", "slides", "beamer", "cover_letter", "response",
     }
-    tex_files = sorted(
-        f for f in scan_dir.glob("*.tex")
-        if f.stem.lower() not in _MACRO_NAMES
-    )
+
+    def _is_tex_document(f: Path) -> bool:
+        if f.stem.lower() in _EXCLUDED_NAMES:
+            return False
+        try:
+            content = f.read_text(encoding="utf-8", errors="ignore")[:8192]
+            return r"\begin{document}" in content
+        except OSError:
+            return False
+
+    tex_files = sorted(f for f in scan_dir.glob("*.tex") if _is_tex_document(f))
     all_candidates = pdfs + tex_files
 
     if len(all_candidates) <= 1:
