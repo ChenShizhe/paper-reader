@@ -202,37 +202,6 @@ Return ONLY a JSON object with this structure:
 """
 
 
-def _call_llm_json(prompt: str, model: str) -> Optional[dict]:
-    """Call Anthropic API expecting a JSON response. Returns parsed dict or None on failure."""
-    try:
-        import anthropic
-    except ImportError:
-        return None
-
-    try:
-        client = anthropic.Anthropic()
-        message = client.messages.create(
-            model=model,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        response_text = message.content[0].text.strip()
-    except Exception:
-        return None
-
-    # Strip markdown code fences if present
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        return None
-
 
 # ---------------------------------------------------------------------------
 # Heuristic fallback extraction (no LLM)
@@ -471,15 +440,7 @@ def run_step43(
     entries: list[dict] = []
 
     if segments:
-        segment_texts = [_strip_frontmatter(s["text"]) for s in segments]
-        prompt = _build_notation_extraction_prompt(cite_key, segment_texts)
-        llm_result = _call_llm_json(prompt, model)
-
-        if llm_result and "entries" in llm_result and isinstance(llm_result["entries"], list):
-            entries = llm_result["entries"]
-        else:
-            # Fallback: heuristic extraction when LLM unavailable or returned invalid JSON
-            entries = _heuristic_extract_notation(segments)
+        entries = _heuristic_extract_notation(segments)
 
     # Write artifacts
     yaml_path = _write_notation_dict_yaml(bank_root, cite_key, entries, source_label)

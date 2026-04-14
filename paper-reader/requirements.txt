@@ -2,9 +2,6 @@
 PyYAML>=6.0
 pydantic>=2.6
 
-# LLM client used by reader workers
-anthropic>=0.34.0
-
 # Bibliography validation and parsing
 bibtexparser>=1.4.0
 

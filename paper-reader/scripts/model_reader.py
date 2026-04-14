@@ -127,41 +127,6 @@ def _update_xref_index(paper_bank_root: Path, cite_key: str, equations: list[dic
     )
 
 
-# ---------------------------------------------------------------------------
-# LLM helpers
-# ---------------------------------------------------------------------------
-
-def _call_llm_json(prompt: str, model: str) -> Optional[dict]:
-    """Call Anthropic API expecting a JSON response. Returns parsed dict or None."""
-    import os
-    if os.path.exists("mock_model_reader.json"):
-        with open("mock_model_reader.json", "r") as f:
-            return json.load(f)
-            
-    try:
-        import anthropic
-    except ImportError:
-        return None
-
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    response_text = message.content[0].text.strip()
-
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -487,9 +452,7 @@ def run_model_reading(
             layer_a=layer_a,
         )
 
-        result = _call_llm_json(prompt, model)
-        if result is None:
-            result = _fallback_model_extraction(segment_label)
+        result = _fallback_model_extraction(segment_label)
 
         extraction_results.append(result)
 
@@ -634,4 +597,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     main()

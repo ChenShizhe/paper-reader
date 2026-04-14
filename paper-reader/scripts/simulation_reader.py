@@ -107,38 +107,6 @@ def _has_translation_artifacts(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# LLM helpers
-# ---------------------------------------------------------------------------
-
-def _call_llm_json(prompt: str, model: str) -> Optional[dict]:
-    """Call Anthropic API expecting a JSON response. Returns parsed dict or None."""
-    try:
-        import anthropic
-    except ImportError:
-        return None
-
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    response_text = message.content[0].text.strip()
-
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Simulation extraction protocol — prompt and fallback
 # ---------------------------------------------------------------------------
 
@@ -591,9 +559,7 @@ def run_simulation_reading(
             layer_a=layer_a,
         )
 
-        result = _call_llm_json(prompt, model)
-        if result is None:
-            result = _fallback_simulation_extraction(segment_label, scenario_type)
+        result = _fallback_simulation_extraction(segment_label, scenario_type)
 
         extraction_results.append(result)
 

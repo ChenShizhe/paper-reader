@@ -230,33 +230,6 @@ def _build_gap_entry(idx: int, raw: dict, cite_key: str) -> dict:
     return entry
 
 
-# ---------------------------------------------------------------------------
-# LLM helpers
-# ---------------------------------------------------------------------------
-
-
-def _call_llm_json(prompt: str, model: str) -> Optional[dict]:
-    """Call the Anthropic API expecting a JSON response. Returns parsed dict or None."""
-    try:
-        import anthropic
-    except ImportError:
-        return None
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    response_text = message.content[0].text.strip()
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        return None
 
 
 def _build_xref_gap_prompt(
@@ -358,26 +331,11 @@ def _consolidate_gaps_live(
             notes_context_parts.append(fpath.read_text(encoding="utf-8")[:1000])
     notes_context = "\n\n".join(notes_context_parts)
 
-    # Step 5: generate cross-referencing gaps via LLM
-    xref_prompt = _build_xref_gap_prompt(cite_key, gap_entries, notes_context)
-    xref_result = _call_llm_json(xref_prompt, model)
-    if xref_result and isinstance(xref_result.get("xref_gaps"), list):
-        for raw_xref in xref_result["xref_gaps"]:
-            raw_xref.setdefault("gap_type", GAP_TYPE_XREF)
-            gap_entries.append(_build_gap_entry(len(gap_entries) + 1, raw_xref, cite_key))
-        gap_entries = _deduplicate_gaps(gap_entries)
+    # Step 5: cross-referencing gaps (skipped — requires subagent dispatch for LLM)
 
-    # Step 6: soft minimum check — if <3 gaps, do one additional targeted scan
-    soft_minimum_triggered = False
-    if len(gap_entries) < SOFT_MINIMUM_GAP_COUNT:
-        soft_minimum_triggered = True
-        scan_prompt = _build_targeted_scan_prompt(cite_key, notes_context)
-        scan_result = _call_llm_json(scan_prompt, model)
-        if scan_result and isinstance(scan_result.get("additional_gaps"), list):
-            for raw_add in scan_result["additional_gaps"]:
-                gap_entries.append(_build_gap_entry(len(gap_entries) + 1, raw_add, cite_key))
-            gap_entries = _deduplicate_gaps(gap_entries)
-        # If still <3 on second pass, that is acceptable (genuinely simple paper)
+    # Step 6: soft minimum check
+    soft_minimum_triggered = len(gap_entries) < SOFT_MINIMUM_GAP_COUNT
+    # If <3 gaps on heuristic pass, that is acceptable (genuinely simple paper)
 
     return gap_entries, soft_minimum_triggered
 

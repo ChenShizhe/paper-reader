@@ -280,33 +280,6 @@ def _determine_status_heuristic(
     return STATUS_UNCERTAIN
 
 
-# ---------------------------------------------------------------------------
-# LLM helpers
-# ---------------------------------------------------------------------------
-
-
-def _call_llm_json(prompt: str, model: str) -> Optional[dict]:
-    """Call the Anthropic API expecting a JSON response. Returns parsed dict or None."""
-    try:
-        import anthropic
-    except ImportError:
-        return None
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    response_text = message.content[0].text.strip()
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        return None
 
 
 def _build_claim_verification_prompt(
@@ -457,18 +430,8 @@ def _run_verification_live(
     signals = _extract_claim_support_signals(evidence_data)
     evidence_found = bool(found_files)
 
-    # Try LLM-assisted verification for ambiguous cases
+    # LLM-assisted verification skipped — requires subagent dispatch
     llm_verifications: dict[int, dict] = {}
-    if claims and evidence_found:
-        prompt = _build_claim_verification_prompt(
-            cite_key, claims, signals, high_severity_gaps
-        )
-        llm_result = _call_llm_json(prompt, model)
-        if llm_result and isinstance(llm_result.get("verifications"), list):
-            for v in llm_result["verifications"]:
-                if isinstance(v, dict):
-                    idx = v.get("claim_index", 0)
-                    llm_verifications[idx] = v
 
     # Build verification table: merge LLM result with heuristic fallback
     verification_table: list[dict] = []
@@ -693,4 +656,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     main()

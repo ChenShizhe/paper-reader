@@ -326,35 +326,6 @@ confidence: <high|medium|low>
 """
 
 
-def _call_llm_positioning(prompt: str, model: str) -> tuple[str, str]:
-    """Call Anthropic API and return (positioning_text, confidence).
-
-    Returns ("(LLM unavailable)", "low") if the SDK is not installed.
-    """
-    try:
-        import anthropic
-    except ImportError:
-        return "(Anthropic SDK not installed — positioning not generated)", "low"
-
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=model,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    response_text = message.content[0].text.strip()
-
-    # Extract confidence level
-    confidence = "low"
-    for line in response_text.splitlines():
-        stripped = line.strip().lower()
-        if stripped.startswith("confidence:"):
-            val = stripped.split(":", 1)[1].strip()
-            if val in ("high", "medium", "low"):
-                confidence = val
-            break
-
-    return response_text, confidence
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +459,8 @@ def run_step41(
         vault_paper_matches=vault_paper_matches,
         vault_author_matches=vault_author_matches,
     )
-    positioning_text, positioning_confidence = _call_llm_positioning(prompt, model)
+    positioning_text = "(heuristic positioning — use subagent dispatch for LLM-enhanced)"
+    positioning_confidence = "low"
 
     # 5. Write intro.md
     intro_path = _write_intro_md(

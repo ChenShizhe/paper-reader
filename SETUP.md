@@ -15,6 +15,7 @@ This guide walks through setting up paper-reader on a fresh machine. It is writt
 
 | Dependency | What it enables | Install |
 |------------|----------------|---------|
+| [Pandoc](https://pandoc.org/) | LaTeX-to-Markdown translation | macOS: `brew install pandoc`. Windows: `choco install pandoc` or `scoop install pandoc`. Linux: `apt install pandoc` |
 | [Zotero](https://www.zotero.org/) + Zotero MCP | Citation library search and sync | See [Zotero MCP setup](#zotero-mcp-setup) below |
 | [MinerU](https://github.com/opendatalab/MinerU) | PDF-to-Markdown translation (for papers without LaTeX source) | `pip install mineru` |
 | [memory-skill](https://github.com/ChenShizhe/memory-skill) | Session memory, vault integration | See that repo's SETUP.md |

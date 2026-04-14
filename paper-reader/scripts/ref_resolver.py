@@ -132,38 +132,6 @@ def _load_dummy_notes(vault_root: Path, cite_key: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# LLM helpers
-# ---------------------------------------------------------------------------
-
-def _call_llm_json(prompt: str, model: str) -> Optional[dict]:
-    """Call Anthropic API expecting a JSON response. Returns parsed dict or None."""
-    try:
-        import anthropic
-    except ImportError:
-        return None
-
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    response_text = message.content[0].text.strip()
-
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Reference resolution protocol
 # ---------------------------------------------------------------------------
 
@@ -422,12 +390,7 @@ def run_ref_resolution(
                 all_ref_text_parts.append(text)
     combined_ref_text = "\n\n".join(all_ref_text_parts)
 
-    # Run resolution protocol via LLM
-    prompt = _build_ref_resolution_prompt(cite_key, combined_ref_text, dummy_notes, layer_a)
-    resolution = _call_llm_json(prompt, model)
-
-    if resolution is None:
-        resolution = {"resolved": [], "unresolved": [], "new_dummy_candidates": []}
+    resolution = {"resolved": [], "unresolved": [], "new_dummy_candidates": []}
 
     resolved_list: list[dict] = resolution.get("resolved", [])
     unresolved_list: list[dict] = resolution.get("unresolved", [])

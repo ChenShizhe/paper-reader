@@ -269,38 +269,8 @@ Synthesize across all blocks to produce:
 """
 
 
-def _call_llm_json(prompt: str, model: str) -> Optional[dict]:
-    """Call Anthropic API expecting a JSON response. Returns parsed dict or None on failure."""
-    try:
-        import anthropic
-    except ImportError:
-        return None
-
-    client = anthropic.Anthropic()
-    message = client.messages.create(
-        model=model,
-        max_tokens=2048,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    response_text = message.content[0].text.strip()
-
-    # Strip markdown code fences if present
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()
-        # Remove first and last lines (``` fences)
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines)
-
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        return None
-
-
 # ---------------------------------------------------------------------------
-# Fallback (no-LLM) classifiers
+# Heuristic classifiers
 # ---------------------------------------------------------------------------
 
 def _fallback_classify_paragraph(paragraph: str) -> dict:
@@ -587,9 +557,7 @@ def run_step42(
                 paragraph_text=para,
                 r_intro_rules=r_intro_rules,
             )
-            result = _call_llm_json(prompt, model)
-            if result is None:
-                result = _fallback_classify_paragraph(para)
+            result = _fallback_classify_paragraph(para)
 
             # Ensure block_type is a valid label
             if result.get("block_type") not in BLOCK_TYPES:
@@ -604,9 +572,7 @@ def run_step42(
             classified_blocks=classified_blocks,
             r_intro_rules=r_intro_rules,
         )
-        synthesis = _call_llm_json(synth_prompt, model)
-        if synthesis is None:
-            synthesis = _fallback_synthesize(classified_blocks)
+        synthesis = _fallback_synthesize(classified_blocks)
     else:
         synthesis = {"contributions": [], "challenges": []}
 
@@ -699,4 +665,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     main()

@@ -245,6 +245,11 @@ def build_report() -> dict[str, object]:
             False,
             "use regex-based structural checks for refs.bib validation",
         ),
+        check_tool(
+            "pandoc",
+            False,
+            "install pandoc (brew install pandoc / choco install pandoc) for LaTeX-to-markdown translation",
+        ),
     ]
 
     # ------------------------------------------------------------------
