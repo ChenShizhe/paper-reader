@@ -2,17 +2,43 @@
 
 A literature pipeline for AI agents: discover papers, read them deeply, and coordinate batch reading sessions.
 
-## Quick Start (new machine)
+Built as a set of [Claude Code](https://claude.ai/claude-code) skills -- model-agnostic markdown instructions that any LLM agent runtime can follow.
+
+**No API keys required** for core functionality (arXiv, OpenAlex).
+
+## Quick start
 
 ```bash
+# 1. Clone and install
 git clone https://github.com/ChenShizhe/paper-reader.git
 cd paper-reader
 python3 -m pip install -r paper-reader/requirements.txt
+
+# 2. Create working directories
 mkdir -p ~/Documents/paper-bank ~/Documents/citadel ~/.research-workdir
+
+# 3. Preflight check -- verify your environment
 python3 paper-discovery/scripts/preflight_discovery.py
+python3 paper-reader/scripts/preflight_extraction.py
 ```
 
-**Done:** Preflight shows `OK` for arXiv and OpenAlex. No API keys needed for core functionality. See [SETUP.md](SETUP.md) for the full walkthrough including Zotero setup and cross-platform notes.
+Both preflight scripts should report `OK`. See [SETUP.md](SETUP.md) for the full walkthrough including Zotero setup and cross-platform notes.
+
+## Usage example
+
+```
+# 1. Discover papers on a topic (via paper-discovery skill)
+/paper-discovery  "Find recent papers on neural Hawkes processes"
+#    -> produces paper_manifest.json under $WORK_ROOT
+
+# 2. Read a paper from the manifest (via paper-reader skill)
+/paper-reader  "Read cite_key=mei2017neuralhawkes"
+#    -> produces section-level notes and a summary in $PAPER_BANK
+
+# 3. Check the vault output
+ls ~/Documents/citadel/literature/
+#    -> vault note written by knowledge-maester after reading completes
+```
 
 ## Skills included
 
@@ -49,27 +75,6 @@ Set these environment variables to override default paths:
 | `ZOTERO_MCP_ROOT` | `~/Documents/MCPs/zotero-mcp` | Path to Zotero MCP server installation |
 | `ZOTERO_LIBRARY_ID` | *(none)* | Zotero library ID for remote API access |
 | `ZOTERO_API_KEY` | *(none)* | Zotero API key for remote API access |
-
-## Quick start
-
-1. **Preflight check** -- verify your environment:
-   ```bash
-   python3 paper-reader/scripts/preflight_extraction.py
-   python3 paper-discovery/scripts/preflight_discovery.py
-   ```
-
-2. **Discover papers** -- build a manifest of candidate papers:
-   ```bash
-   # Use paper-discovery skill instructions to search arXiv, OpenAlex, etc.
-   # Produces paper_manifest.json under $WORK_ROOT
-   ```
-
-3. **Read a paper** -- run the full reading pipeline on a single paper:
-   ```bash
-   python3 paper-reader/scripts/run_pipeline.py --cite-key <cite_key>
-   ```
-
-4. **Batch coordination** -- use paper-batch-coordinator to orchestrate reading multiple papers from a manifest.
 
 ## Directory layout
 
