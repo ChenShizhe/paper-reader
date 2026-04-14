@@ -563,9 +563,8 @@ It supports three modes:
 1. **Inline (default):** Calls section reader scripts (`intro_reader.py`,
    `model_reader.py`, `method_reader.py`, `theory_reader.py`,
    `comprehend_empirical.py`) as subprocesses in the same session.
-   Works end-to-end without spawning separate agent sessions. Quality depends
-   on whether `ANTHROPIC_API_KEY` is set — without it, readers fall back to
-   heuristic extraction.
+   Works end-to-end without spawning separate agent sessions. Readers use
+   built-in heuristic extraction — no API keys or external services required.
 
 2. **Subagent:** Produces a dispatch plan JSON. The calling agent is expected
    to spawn separate subagent sessions for each section, giving each one
