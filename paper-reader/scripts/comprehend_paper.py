@@ -290,13 +290,6 @@ def _live_run(args: argparse.Namespace) -> int:
         f"Comprehension: running {len(readers_to_run)} reader(s) inline for {cite_key}",
         file=sys.stderr,
     )
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print(
-            "WARNING: ANTHROPIC_API_KEY is not set. Section readers will use "
-            "fallback heuristics instead of LLM calls — comprehension quality "
-            "may be reduced.",
-            file=sys.stderr,
-        )
 
     results: dict[str, str] = {}
     failures: list[str] = []
