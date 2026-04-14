@@ -110,7 +110,7 @@ Optional API keys for enhanced features:
 If you use Zotero for citation management:
 
 1. Install the Zotero desktop app
-2. Clone and set up [zotero-mcp](https://github.com/example/zotero-mcp) at `~/Documents/MCPs/zotero-mcp`
+2. Install a Zotero MCP server at `~/Documents/MCPs/zotero-mcp` (search for "zotero mcp server" for available implementations)
 3. Set `ZOTERO_LIBRARY_ID` and `ZOTERO_API_KEY` in your shell profile
 4. Re-run `preflight_discovery.py` — Zotero should now show `OK`
 
