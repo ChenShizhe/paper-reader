@@ -61,6 +61,7 @@ ls ~/Documents/citadel/literature/
 | [MinerU](https://github.com/opendatalab/MinerU) | PDF-to-Markdown translation for the PDF reading path. Without it, only LaTeX sources are supported. |
 | [memory-skill](https://github.com/ChenShizhe/memory-skill) | Session memory and experience logging. Without it, the pipeline runs standalone but loses session context and vault integration. |
 | [knowledge-maester](https://github.com/ChenShizhe/memory-skill) | Vault note writing (part of memory-skill). Without it, `_vault-write-requests.json` files accumulate but are not applied. |
+| [Obsidian](https://obsidian.md/) + [CLI](https://obsidian.md/cli) | Optional vault viewer. Reading notes are plain markdown and work without Obsidian, but Obsidian provides graph view and backlink navigation. |
 
 ## Configuration
 
