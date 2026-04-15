@@ -28,11 +28,11 @@ Both preflight scripts should report `OK`. See [SETUP.md](SETUP.md) for the full
 
 ```
 # 1. Discover papers on a topic (via paper-discovery skill)
-/paper-discovery  "Find recent papers on neural Hawkes processes"
+/paper-discovery  "Find recent papers on transformer architectures"
 #    -> produces paper_manifest.json under $WORK_ROOT
 
 # 2. Read a paper from the manifest (via paper-reader skill)
-/paper-reader  "Read cite_key=mei2017neuralhawkes"
+/paper-reader  "Read cite_key=vaswani2017attention"
 #    -> produces section-level notes and a summary in $PAPER_BANK
 
 # 3. Check the vault output
