@@ -57,7 +57,7 @@ ls ~/Documents/citadel/literature/
 
 | Dependency | What it enables |
 |------------|----------------|
-| Zotero MCP server | Zotero library search and citation sync. Without it, Zotero-based discovery and sync are skipped. |
+| [Zotero MCP server](https://github.com/54yyyu/zotero-mcp) | Zotero library search and citation sync. Without it, Zotero-based discovery and sync are skipped. |
 | [MinerU](https://github.com/opendatalab/MinerU) | PDF-to-Markdown translation for the PDF reading path. Without it, only LaTeX sources are supported. |
 | [memory-skill](https://github.com/ChenShizhe/memory-skill) | Session memory and experience logging. Without it, the pipeline runs standalone but loses session context and vault integration. |
 | [knowledge-maester](https://github.com/ChenShizhe/memory-skill) | Vault note writing (part of memory-skill). Without it, `_vault-write-requests.json` files accumulate but are not applied. |
