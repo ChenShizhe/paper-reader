@@ -2,7 +2,7 @@
 
 A literature pipeline for AI agents: discover papers, read them deeply, and coordinate batch reading sessions.
 
-Built as a set of [Claude Code](https://claude.ai/claude-code) skills -- model-agnostic markdown instructions that any LLM agent runtime can follow.
+Built as model-agnostic markdown instructions that any LLM agent runtime can follow.
 
 **No API keys required** for core functionality (arXiv, OpenAlex).
 
