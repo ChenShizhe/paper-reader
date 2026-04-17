@@ -1,48 +1,75 @@
 #!/usr/bin/env python3
-"""summarize_paper.py — Author the final two-level literature note for a paper.
+"""summarize_paper.py — Author the final two-level literature note for a paper or book.
 
-Reads inputs from the paper-bank directory and Citadel per-section reading
-notes, then produces a two-level literature note at:
-  <vault-path>/literature/papers/<cite_key>.md
+PAPER MODE (default):
+  Reads inputs from the paper-bank directory and Citadel per-section reading
+  notes, then produces a two-level literature note at:
+    <vault-path>/literature/papers/<cite_key>.md
 
-Level 1 (top): A 1–3 paragraph abstract-level summary covering the paper's
-  contribution, methods, key results, and significance. Synthesized from the
-  full set of section notes (not a paraphrase of the abstract). Written for a
-  reader who wants the gist in under 2 minutes.
+  Level 1 (top): A 1–3 paragraph abstract-level summary covering the paper's
+    contribution, methods, key results, and significance. Synthesized from the
+    full set of section notes (not a paraphrase of the abstract). Written for a
+    reader who wants the gist in under 2 minutes.
 
-Level 2 (body): A section-by-section detailed summary that preserves key
-  definitions, equations (in $$ ... $$ delimiters), main theorems (from
-  theory.md), and empirical findings (from empirical.md). Each section
-  heading links back to the corresponding Citadel reading note using Obsidian
-  wikilink syntax: [[cite_key/section-note]].
+  Level 2 (body): A section-by-section detailed summary that preserves key
+    definitions, equations (in $$ ... $$ delimiters), main theorems (from
+    theory.md), and empirical findings (from empirical.md). Each section
+    heading links back to the corresponding Citadel reading note using Obsidian
+    wikilink syntax: [[cite_key/section-note]].
 
-Inputs consumed from the paper-bank directory:
-  _catalog.yaml         — title, authors, year, abstract
-  notation_dict.yaml    — notation entries
-  _xref_index.yaml      — cross-reference index (optional enrichment)
-  _theorem_index.json   — theorem/proposition index (optional; seeds key results)
+  Inputs consumed from the paper-bank directory:
+    _catalog.yaml         — title, authors, year, abstract
+    notation_dict.yaml    — notation entries
+    _xref_index.yaml      — cross-reference index (optional enrichment)
+    _theorem_index.json   — theorem/proposition index (optional; seeds key results)
 
-Reading notes consumed from Citadel vault (<vault>/literature/papers/<key>/):
-  intro.md, model.md, theory.md, empirical.md, gaps.md
+  Reading notes consumed from Citadel vault (<vault>/literature/papers/<key>/):
+    intro.md, model.md, theory.md, empirical.md, gaps.md
 
-The output note uses schema v2 frontmatter (compatible with ingest_paper.py).
+  The output note uses schema v2 frontmatter (compatible with ingest_paper.py).
 
-Notation externalization: The notation section is written to a separate file
-  <cite_key>-notation.md in the same Citadel directory. A wikilink
-  [[<cite_key>-notation]] is inserted in place of the inline notation section.
-  This pattern applies to any section classified as a reference-lookup type
-  (notation, glossary) or exceeding 300 words.
+  Notation externalization: The notation section is written to a separate file
+    <cite_key>-notation.md in the same Citadel directory. A wikilink
+    [[<cite_key>-notation]] is inserted in place of the inline notation section.
+    This pattern applies to any section classified as a reference-lookup type
+    (notation, glossary) or exceeding 300 words.
+
+BOOK MODE (--mode book):
+  Aggregates per-chapter reading notes into a top-level synthesis note at:
+    <vault-path>/literature/papers/<cite_key>.md
+
+  Reads:
+    <vault>/literature/papers/<cite_key>/chapter_plan.md  — required
+    <vault>/literature/papers/<cite_key>/<slug>.md         — per chapter
+
+  Chapters are included when the chapter plan row has include_in_synthesis: true
+  AND the chapter note's frontmatter has status: complete.
+
+  Output sections (in order):
+    ## Executive overview    — synthesized prose ~500 words
+    ## Portfolio Lens (or ## Domain Lens) — aggregated, one sub-section per chapter
+    ## Chapter synopses      — one paragraph per chapter
+    ## Key numbers and projections — aggregated from projection-type claims
+    ## Open questions        — aggregated from per-chapter open questions
+
+  synthesis_target_words (from chapter plan frontmatter, default 5000) controls
+  the soft word limit. synthesis_overlength: true is set in frontmatter when the
+  output exceeds the target by more than 20%.
 
 Usage:
   python3 summarize_paper.py --cite-key <key> --paper-bank-dir <path>
   python3 summarize_paper.py --cite-key <key> --paper-bank-dir <path> \\
+      --vault-path ~/Documents/citadel [--dry-run] [--output <path>]
+  python3 summarize_paper.py --mode book --cite-key <key> \\
       --vault-path ~/Documents/citadel [--dry-run] [--output <path>]
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import re
 import sys
@@ -51,6 +78,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+# chapter_plan_parser lives alongside this script in the scripts/ directory;
+# imported lazily inside synthesize_book() so paper-mode has no extra dependency.
+_CHAPTER_PLAN_PARSER_AVAILABLE: bool | None = None
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -722,6 +753,304 @@ def _render_note(
     return f"{fm_block}\n{auto_block}\n", external_files
 
 
+# ─── Book-mode: section extraction helpers ───────────────────────────────────
+
+
+def _extract_frontmatter_dict(text: str) -> dict[str, Any]:
+    """Parse YAML frontmatter block from a Markdown string, returning {} if none."""
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return {}
+    yaml_block = text[4:end]
+    parsed = yaml.safe_load(yaml_block)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_md_section(text: str, heading: str) -> str:
+    """Extract content under an H2 heading (case-insensitive exact match).
+
+    Returns the text between the matched heading line and the next H2+ heading
+    or end-of-file, stripped of leading/trailing whitespace.
+    """
+    body = _strip_frontmatter(text)
+    pattern = re.compile(
+        r'(?m)^##\s+' + re.escape(heading) + r'\s*\n(.*?)(?=^##\s|\Z)',
+        re.DOTALL | re.IGNORECASE,
+    )
+    m = pattern.search(body)
+    if not m:
+        return ""
+    return m.group(1).strip()
+
+
+def _extract_lens_from_chapter(text: str) -> tuple[str, str]:
+    """Extract the Portfolio Lens or Domain Lens section from a chapter note.
+
+    Returns (lens_label, content). Tries 'Portfolio Lens' first, then
+    'Domain Lens'. Returns ('Portfolio Lens', '') if neither is found.
+    """
+    for label in ("Portfolio Lens", "Domain Lens"):
+        content = _extract_md_section(text, label)
+        if content:
+            return label, content
+    return "Portfolio Lens", ""
+
+
+def _extract_first_paragraph(text: str) -> str:
+    """Return the first non-heading, non-empty paragraph from the body."""
+    body = _strip_frontmatter(text)
+    for para in re.split(r'\n{2,}', body.strip()):
+        para = para.strip()
+        if para and not para.startswith('#'):
+            return para
+    return ""
+
+
+# ─── Book-mode: frontmatter builder ──────────────────────────────────────────
+
+
+def _build_book_synthesis_frontmatter(
+    cite_key: str,
+    plan_fm: dict[str, Any],
+    generated_at: str,
+    chapter_count: int,
+    synthesis_overlength: bool,
+) -> dict[str, Any]:
+    """Build schema v2 frontmatter for the book synthesis note."""
+    today = generated_at[:10]
+    fm: dict[str, Any] = {
+        "type": "book",
+        "schema_version": "2",
+        "cite_key": cite_key,
+        "title": _clean(plan_fm.get("title") or cite_key),
+        "date": today,
+        "last_updated": today,
+        "review_status": "draft",
+        "content_status": "synthesized",
+        "source_type": "chapter_notes",
+        "source_path": f"literature/papers/{cite_key}/",
+        "synthesis_target_words": int(plan_fm.get("synthesis_target_words", 5000)),
+        "chapters_included": chapter_count,
+        "auto_block_hash": "",
+    }
+    if synthesis_overlength:
+        fm["synthesis_overlength"] = True
+    return fm
+
+
+# ─── Book-mode: synthesis orchestration ──────────────────────────────────────
+
+
+def synthesize_book(
+    cite_key: str,
+    vault_path: Path,
+    output: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Produce a book-mode synthesis note aggregating per-chapter reading notes.
+
+    Reads:
+      <vault>/literature/papers/<cite_key>/chapter_plan.md  — required
+      <vault>/literature/papers/<cite_key>/<slug>.md         — per chapter
+
+    Chapters are included when:
+      - chapter plan row has include_in_synthesis == True
+      - chapter note frontmatter has status == 'complete'
+
+    Writes:
+      <vault>/literature/papers/<cite_key>.md
+    """
+    from chapter_plan_parser import parse_chapter_plan  # noqa: PLC0415
+
+    vault_notes_dir = vault_path / "literature" / "papers" / cite_key
+    chapter_plan_path = vault_notes_dir / "chapter_plan.md"
+    output_path = output or (vault_path / "literature" / "papers" / f"{cite_key}.md")
+
+    result: dict[str, Any] = {
+        "cite_key": cite_key,
+        "mode": "book",
+        "vault_path": _to_posix(vault_path),
+        "output_path": _to_posix(output_path),
+        "dry_run": dry_run,
+    }
+
+    if not chapter_plan_path.exists():
+        msg = f"chapter_plan.md not found at {_to_posix(chapter_plan_path)}"
+        if dry_run:
+            result["missing_required"] = [msg]
+            return result
+        print(f"ERROR: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    plan_fm, plan_rows = parse_chapter_plan(chapter_plan_path)
+    synthesis_target: int = int(plan_fm.get("synthesis_target_words", 5000))
+
+    # Determine lens label from the first synthesis-included row's domain_lens.
+    lens_label = "Portfolio Lens"
+    for row in plan_rows:
+        if row.include_in_synthesis and row.domain_lens:
+            dl = row.domain_lens.strip().lower()
+            if dl in ("domain", "domain lens", "domain_lens"):
+                lens_label = "Domain Lens"
+            else:
+                lens_label = "Portfolio Lens"
+            break
+
+    # Collect chapter notes that are both flagged for synthesis and marked complete.
+    included: list[tuple[Any, str]] = []  # (ChapterRow, note_content)
+    for row in plan_rows:
+        if not row.include_in_synthesis:
+            continue
+        note_path = vault_notes_dir / f"{row.slug}.md"
+        if not note_path.exists():
+            print(
+                f"WARNING [{cite_key}]: chapter note {row.slug}.md not found — skipping.",
+                file=sys.stderr,
+            )
+            continue
+        content = note_path.read_text(encoding="utf-8")
+        note_fm = _extract_frontmatter_dict(content)
+        if note_fm.get("status") != "complete":
+            print(
+                f"INFO [{cite_key}]: skipping {row.slug}.md "
+                f"(status={note_fm.get('status')!r}, expected 'complete').",
+                file=sys.stderr,
+            )
+            continue
+        included.append((row, content))
+
+    result["plan_rows"] = len(plan_rows)
+    result["chapters_included"] = len(included)
+    result["synthesis_target_words"] = synthesis_target
+
+    if dry_run:
+        return result
+
+    generated_at = datetime.now(tz=timezone.utc).isoformat()
+
+    # ── § Portfolio Lens / Domain Lens — one ### per chapter ─────────────────
+    lens_parts: list[str] = [f"## {lens_label}", ""]
+    for row, content in included:
+        _, chapter_lens = _extract_lens_from_chapter(content)
+        lens_parts.append(f"### {row.slug}")
+        lens_parts.append("")
+        lens_parts.append(
+            chapter_lens if chapter_lens
+            else f"*No {lens_label} section found in {row.slug}.md.*"
+        )
+        lens_parts.append("")
+
+    # ── § Chapter synopses — one paragraph per chapter ───────────────────────
+    synopses_parts: list[str] = ["## Chapter synopses", ""]
+    for row, content in included:
+        synopsis = _extract_md_section(content, "Synopsis")
+        if not synopsis:
+            synopsis = _extract_first_paragraph(content)
+        if not synopsis:
+            synopsis = f"*No synopsis available for {row.slug}.*"
+        synopses_parts.append(f"**{row.slug}**: {synopsis}")
+        synopses_parts.append("")
+
+    # ── § Key numbers and projections — aggregated ───────────────────────────
+    key_numbers_parts: list[str] = ["## Key numbers and projections", ""]
+    found_any_numbers = False
+    for row, content in included:
+        numbers = (
+            _extract_md_section(content, "Key numbers and projections")
+            or _extract_md_section(content, "Key numbers")
+            or _extract_md_section(content, "Projections")
+        )
+        if numbers:
+            found_any_numbers = True
+            key_numbers_parts += [f"### {row.slug}", "", numbers, ""]
+    if not found_any_numbers:
+        key_numbers_parts += [
+            "*No projection-type claims extracted from chapter notes.*", ""
+        ]
+
+    # ── § Open questions — aggregated ────────────────────────────────────────
+    open_q_parts: list[str] = ["## Open questions", ""]
+    found_any_oq = False
+    for row, content in included:
+        oq = (
+            _extract_md_section(content, "Open questions")
+            or _extract_md_section(content, "Open Questions")
+        )
+        if oq:
+            found_any_oq = True
+            open_q_parts += [f"### {row.slug}", "", oq, ""]
+    if not found_any_oq:
+        open_q_parts += ["*No open questions extracted from chapter notes.*", ""]
+
+    # ── § Executive overview — built from per-chapter synopses (placed first) ─
+    synopsis_texts = [
+        _extract_md_section(content, "Synopsis") or _extract_first_paragraph(content)
+        for _, content in included
+    ]
+    overview_prose = " ".join(s for s in synopsis_texts if s).strip()
+    if not overview_prose:
+        overview_prose = (
+            f"Synthesis of {len(included)} chapter note(s) for {cite_key}. "
+            "See chapter synopses below for per-chapter detail."
+        )
+    exec_overview_parts: list[str] = ["## Executive overview", "", overview_prose, ""]
+
+    # ── Assemble body in required order ──────────────────────────────────────
+    title = _clean(plan_fm.get("title") or cite_key)
+    body_parts: list[str] = [f"# {title}", ""]
+    body_parts += exec_overview_parts
+    body_parts += lens_parts
+    body_parts += synopses_parts
+    body_parts += key_numbers_parts
+    body_parts += open_q_parts
+
+    body_text = "\n".join(body_parts).rstrip()
+    word_count = len(body_text.split())
+    synthesis_overlength = word_count > synthesis_target * 1.2
+
+    if synthesis_overlength:
+        print(
+            f"WARNING [{cite_key}]: synthesis word count {word_count} exceeds "
+            f"target {synthesis_target} by >20% — setting synthesis_overlength: true.",
+            file=sys.stderr,
+        )
+
+    # ── Wrap in auto-generated block and compute hash ─────────────────────────
+    auto_block = (
+        f"<!-- AUTO-GENERATED:BEGIN -->\n{body_text}\n<!-- AUTO-GENERATED:END -->"
+    )
+    block_hash = hashlib.sha256(auto_block.encode("utf-8")).hexdigest()
+
+    fm = _build_book_synthesis_frontmatter(
+        cite_key=cite_key,
+        plan_fm=plan_fm,
+        generated_at=generated_at,
+        chapter_count=len(included),
+        synthesis_overlength=synthesis_overlength,
+    )
+    fm["auto_block_hash"] = block_hash
+
+    fm_yaml = yaml.safe_dump(
+        fm, allow_unicode=True, default_flow_style=False, sort_keys=False
+    ).strip()
+    rendered = f"---\n{fm_yaml}\n---\n\n{auto_block}\n"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(rendered, encoding="utf-8")
+    print(f"WRITTEN: {_to_posix(output_path)}", file=sys.stderr)
+
+    return {
+        **result,
+        "bytes_written": len(rendered.encode("utf-8")),
+        "generated_at": generated_at,
+        "word_count": word_count,
+        "synthesis_overlength": synthesis_overlength,
+        "output_path": _to_posix(output_path),
+    }
+
+
 # ─── Main orchestration ───────────────────────────────────────────────────────
 
 
@@ -863,6 +1192,439 @@ def summarize_paper(
     }
 
 
+# ─── Chain-map report renderer ───────────────────────────────────────────────
+
+
+def render_chain_map_report(
+    cite_key: str,
+    rows: list[dict[str, Any]],
+    editorial_notes: list[str],
+    cross_source_result: dict[str, Any] | None = None,
+    output_path: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Render a chain-map extraction report and write it to *output_path*.
+
+    Returns a summary dict suitable for JSON output.
+    """
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    lines: list[str] = []
+    lines.append("---")
+    lines.append(f"cite_key: {cite_key}")
+    lines.append("mode: chain_map")
+    lines.append(f"extracted_at: {now_iso}")
+    lines.append(f"row_count: {len(rows)}")
+    lines.append(f"editorial_note_count: {len(editorial_notes)}")
+    lines.append("---")
+    lines.append("")
+    lines.append(f"# Chain Map Extraction: {cite_key}")
+    lines.append("")
+    lines.append(f"**Rows extracted:** {len(rows)}  ")
+    lines.append(f"**Editorial notes (graphical-only exhibits):** {len(editorial_notes)}")
+    lines.append("")
+
+    if rows:
+        lines.append("## Extracted Tickers")
+        lines.append("")
+        lines.append("| Ticker | Normalized | Format | Company | Tier |")
+        lines.append("|--------|-----------|--------|---------|------|")
+        for row in rows:
+            orig = row.get("original_ticker") or row.get("ticker", "NA")
+            norm = row.get("normalized_ticker", orig)
+            fmt = row.get("format_type", "")
+            company = row.get("company_name", "NA")
+            tier = row.get("tier", "NA")
+            lines.append(f"| {orig} | {norm} | {fmt} | {company} | {tier} |")
+        lines.append("")
+
+    if editorial_notes:
+        lines.append("## Editorial Credibility Notes")
+        lines.append("")
+        for note in editorial_notes:
+            lines.append(f"- {note}")
+        lines.append("")
+
+    if cross_source_result:
+        lines.append("## Watchlist Cross-Source")
+        lines.append("")
+        overlap = cross_source_result.get("overlap", [])
+        gaps = cross_source_result.get("gaps", [])
+        emphasis = cross_source_result.get("emphasis", [])
+        lines.append(
+            f"**Overlap** ({len(overlap)} tickers in both paper and watchlist): "
+            + (", ".join(overlap) if overlap else "_none_")
+        )
+        lines.append("")
+        lines.append(
+            f"**Gaps** ({len(gaps)} watchlist tickers not in paper): "
+            + (", ".join(gaps) if gaps else "_none_")
+        )
+        lines.append("")
+        lines.append(
+            f"**Emphasis** ({len(emphasis)} tickers appearing >1×): "
+            + (", ".join(emphasis) if emphasis else "_none_")
+        )
+        lines.append("")
+
+    content = "\n".join(lines)
+
+    summary: dict[str, Any] = {
+        "cite_key": cite_key,
+        "mode": "chain_map",
+        "row_count": len(rows),
+        "editorial_note_count": len(editorial_notes),
+        "output_path": str(output_path) if output_path else None,
+        "dry_run": dry_run,
+    }
+    if cross_source_result:
+        summary["cross_source"] = cross_source_result
+
+    if not dry_run and output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content, encoding="utf-8")
+        print(f"Chain-map report written: {output_path}", file=sys.stderr)
+    elif dry_run:
+        print(content)
+
+    return summary
+
+
+# ─── Chain-map synthesis path ─────────────────────────────────────────────────
+
+
+def _build_chain_map_frontmatter(
+    cite_key: str,
+    data: dict[str, Any],
+    generated_at: str,
+    n_companies: int,
+) -> dict[str, Any]:
+    """Build frontmatter for a chain_map synthesis note."""
+    today = generated_at[:10]
+    title = _clean(str(data.get("title") or cite_key))
+    authors_raw = data.get("authors") or []
+    authors = authors_raw if isinstance(authors_raw, list) else [_clean(str(authors_raw))]
+    year = _clean(str(data.get("year") or ""))
+    return {
+        "type": "paper",
+        "schema_version": "2",
+        "cite_key": cite_key,
+        "title": title,
+        "authors": authors,
+        "year": year,
+        "date": today,
+        "last_updated": today,
+        "review_status": "draft",
+        "content_status": "synthesized",
+        "claim_domain": "sell_side",
+        "reader_mode": "chain_map",
+        "genre": "sell_side_chain_map",
+        "n_companies": n_companies,
+        "data_sections": {
+            "company_inventory": "csv_fenced",
+            "chain_structure": "gfm_table",
+            "geographic_breakdown": "gfm_table",
+        },
+        "source_type": "chain_map_extraction",
+        "source_path": f"literature/papers/{cite_key}/",
+        "auto_block_hash": "",
+    }
+
+
+def _build_chain_map_csv_block(companies: list[dict[str, Any]]) -> str:
+    """Return a fenced ```csv ... ``` string for the company inventory."""
+    if not companies:
+        return "```csv\ncompany_name,ticker,tier,country,notes\n```"
+
+    preferred_cols = ["company_name", "ticker", "tier", "country", "notes"]
+    all_keys_set: set[str] = set()
+    for c in companies:
+        all_keys_set.update(c.keys())
+
+    cols = [k for k in preferred_cols if k in all_keys_set]
+    extras = sorted(k for k in all_keys_set if k not in preferred_cols)
+    cols = cols + extras
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(
+        buf, fieldnames=cols, extrasaction="ignore", lineterminator="\n"
+    )
+    writer.writeheader()
+    for company in companies:
+        writer.writerow({k: company.get(k, "") for k in cols})
+
+    return f"```csv\n{buf.getvalue()}```"
+
+
+def _build_chain_structure_table(chain_tiers: list[dict[str, Any]]) -> str:
+    """Build a GFM table for chain structure (tier / label / example_companies / notes)."""
+    if not chain_tiers:
+        return (
+            "| tier | label | example_companies | notes |\n"
+            "|------|-------|-------------------|-------|\n"
+            "| — | — | — | No tier data available |\n"
+        )
+    lines = [
+        "| tier | label | example_companies | notes |",
+        "|------|-------|-------------------|-------|",
+    ]
+    for row in chain_tiers:
+        tier = _clean(str(row.get("tier") or "—"))
+        label = _clean(str(row.get("label") or "—"))
+        examples = _clean(str(row.get("example_companies") or "—"))
+        notes = _clean(str(row.get("notes") or "—"))
+        lines.append(f"| {tier} | {label} | {examples} | {notes} |")
+    return "\n".join(lines) + "\n"
+
+
+def _build_geographic_table(countries: list[dict[str, Any]]) -> str:
+    """Build a GFM table for geographic breakdown (country / n_companies / share_pct)."""
+    if not countries:
+        return (
+            "| country | n_companies | share_pct |\n"
+            "|---------|------------|----------|\n"
+            "| — | — | No geographic data available |\n"
+        )
+    lines = [
+        "| country | n_companies | share_pct |",
+        "|---------|------------|----------|",
+    ]
+    for row in countries:
+        country = _clean(str(row.get("country") or "—"))
+        n = row.get("n_companies", "—")
+        pct = row.get("share_pct", "—")
+        pct_str = f"{pct:.1f}%" if isinstance(pct, (int, float)) else str(pct)
+        lines.append(f"| {country} | {n} | {pct_str} |")
+    return "\n".join(lines) + "\n"
+
+
+def synthesize_chain_map(
+    cite_key: str,
+    paper_bank_dir: Path,
+    vault_path: Path,
+    output: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Produce a chain-map synthesis note from extraction data.
+
+    Reads _chain_map.json from the paper-bank directory (checks
+    <paper_bank_dir>/<cite_key>/_chain_map.json first, then
+    <paper_bank_dir>/_chain_map.json).
+
+    Writes a single Markdown report at:
+      <vault_path>/literature/papers/<cite_key>.md
+
+    No standalone .csv file is written — the data lives inside the report.
+
+    Expected _chain_map.json fields (all optional):
+      title, authors, year, thesis, chain_tiers, geographic_summary,
+      countries, standouts, watchlist_alignment, companies,
+      key_data_points, editorial_credibility, unparseable_exhibits.
+    """
+    # Resolve paper-bank per-paper directory.
+    if (paper_bank_dir / cite_key / "_chain_map.json").is_file():
+        paper_bank_paper_dir = paper_bank_dir / cite_key
+    elif (paper_bank_dir / cite_key / "_catalog.yaml").is_file():
+        paper_bank_paper_dir = paper_bank_dir / cite_key
+    else:
+        paper_bank_paper_dir = paper_bank_dir
+
+    output_path = output or (vault_path / "literature" / "papers" / f"{cite_key}.md")
+
+    result: dict[str, Any] = {
+        "cite_key": cite_key,
+        "mode": "chain_map",
+        "paper_bank_dir": _to_posix(paper_bank_paper_dir),
+        "vault_path": _to_posix(vault_path),
+        "output_path": _to_posix(output_path),
+        "dry_run": dry_run,
+    }
+
+    chain_map_path = paper_bank_paper_dir / "_chain_map.json"
+    missing_required: list[str] = []
+    if not chain_map_path.exists():
+        missing_required.append(
+            f"_chain_map.json not found at {_to_posix(chain_map_path)}"
+        )
+
+    result["inputs_valid"] = len(missing_required) == 0
+    result["missing_required"] = missing_required
+
+    if dry_run:
+        return result
+
+    if missing_required:
+        for msg in missing_required:
+            print(f"ERROR: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    data = _load_json(chain_map_path) or {}
+    if not isinstance(data, dict):
+        data = {}
+
+    generated_at = datetime.now(tz=timezone.utc).isoformat()
+
+    # ── Extract data fields ───────────────────────────────────────────────────
+    thesis: str = _clean(str(data.get("thesis") or ""))
+
+    chain_tiers: list[dict[str, Any]] = data.get("chain_tiers") or []
+    if not isinstance(chain_tiers, list):
+        chain_tiers = []
+
+    geo_summary: str = _clean(str(data.get("geographic_summary") or ""))
+    countries: list[dict[str, Any]] = data.get("countries") or []
+    if not isinstance(countries, list):
+        countries = []
+
+    standouts: str = _clean(str(data.get("standouts") or ""))
+
+    watchlist_raw = data.get("watchlist_alignment")
+    watchlist_alignment: str = (
+        _clean(str(watchlist_raw))
+        if watchlist_raw is not None and str(watchlist_raw).strip()
+        else "No watchlist provided at extraction time."
+    )
+
+    companies: list[dict[str, Any]] = data.get("companies") or []
+    if not isinstance(companies, list):
+        companies = []
+    n_companies = len(companies)
+
+    key_data_raw = data.get("key_data_points") or []
+    if not isinstance(key_data_raw, list):
+        key_data_raw = [str(key_data_raw)]
+    key_data_points: list[str] = [
+        _clean(str(p)) for p in key_data_raw if str(p).strip()
+    ]
+
+    editorial: str = _clean(str(data.get("editorial_credibility") or ""))
+    unparseable: list[str] = data.get("unparseable_exhibits") or []
+    if not isinstance(unparseable, list):
+        unparseable = [str(unparseable)]
+
+    # ── Section 1: Top-line thesis ────────────────────────────────────────────
+    thesis_text = thesis or f"Top-line thesis not provided for {cite_key}."
+
+    # ── Section 2: Chain structure ────────────────────────────────────────────
+    chain_prose = (
+        f"The supply chain spans {len(chain_tiers)} tier(s). "
+        "See table below for tier-level breakdown."
+        if chain_tiers
+        else "No chain tier data extracted from this report."
+    )
+    chain_table = _build_chain_structure_table(chain_tiers)
+
+    # ── Section 3: Geographic breakdown ──────────────────────────────────────
+    geo_prose = geo_summary or (
+        f"The report covers companies across {len(countries)} country/region(s)."
+        if countries
+        else "No geographic breakdown data extracted from this report."
+    )
+    geo_table = _build_geographic_table(countries)
+
+    # ── Section 4: Standouts ──────────────────────────────────────────────────
+    standouts_text = standouts or "No standout companies identified in the extraction."
+
+    # ── Section 5: Portfolio lens — watchlist alignment ───────────────────────
+    lens_text = watchlist_alignment
+
+    # ── Section 6: Company inventory (fenced CSV inside <details>) ────────────
+    csv_block = _build_chain_map_csv_block(companies)
+    inventory_details = (
+        f"<details><summary>Full {n_companies}-company inventory (fenced CSV)</summary>\n\n"
+        f"{csv_block}\n\n</details>"
+    )
+
+    # ── Section 7: Key data points worth tracking ─────────────────────────────
+    kd_text = (
+        "\n".join(f"- {p}" for p in key_data_points)
+        if key_data_points
+        else "- No key data points extracted from this report."
+    )
+
+    # ── Section 8: Editorial credibility ─────────────────────────────────────
+    editorial_parts: list[str] = []
+    if editorial:
+        editorial_parts.append(editorial)
+    if unparseable:
+        editorial_parts.append(
+            "**Unparseable exhibits:** "
+            + "; ".join(_clean(str(u)) for u in unparseable if str(u).strip())
+        )
+    editorial_text = (
+        "\n\n".join(editorial_parts) or "No editorial credibility notes recorded."
+    )
+
+    # ── Assemble body in required section order ───────────────────────────────
+    title = _clean(str(data.get("title") or cite_key))
+    body_parts: list[str] = [
+        f"# {title}",
+        "",
+        "## Top-line thesis",
+        "",
+        thesis_text,
+        "",
+        "## Chain structure",
+        "",
+        chain_prose,
+        "",
+        chain_table,
+        "",
+        "## Geographic breakdown",
+        "",
+        geo_prose,
+        "",
+        geo_table,
+        "",
+        "## Standouts",
+        "",
+        standouts_text,
+        "",
+        "## Portfolio lens \u2014 watchlist alignment",
+        "",
+        lens_text,
+        "",
+        "## Company inventory",
+        "",
+        inventory_details,
+        "",
+        "## Key data points worth tracking",
+        "",
+        kd_text,
+        "",
+        "## Editorial credibility",
+        "",
+        editorial_text,
+        "",
+    ]
+
+    body_text = "\n".join(body_parts).rstrip()
+    auto_block = (
+        f"<!-- AUTO-GENERATED:BEGIN -->\n{body_text}\n<!-- AUTO-GENERATED:END -->"
+    )
+    block_hash = hashlib.sha256(auto_block.encode("utf-8")).hexdigest()
+
+    fm = _build_chain_map_frontmatter(cite_key, data, generated_at, n_companies)
+    fm["auto_block_hash"] = block_hash
+
+    fm_yaml = yaml.safe_dump(
+        fm, allow_unicode=True, default_flow_style=False, sort_keys=False
+    ).strip()
+    rendered = f"---\n{fm_yaml}\n---\n\n{auto_block}\n"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(rendered, encoding="utf-8")
+    print(f"WRITTEN: {_to_posix(output_path)}", file=sys.stderr)
+
+    return {
+        **result,
+        "bytes_written": len(rendered.encode("utf-8")),
+        "generated_at": generated_at,
+        "n_companies": n_companies,
+        "output_path": _to_posix(output_path),
+    }
+
+
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 
@@ -870,39 +1632,55 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="summarize_paper.py",
         description=(
-            "Author the final two-level literature note for a paper in the Citadel vault.\n\n"
-            "LEVEL 1 (top): A 1–3 paragraph abstract-level summary synthesized from the\n"
-            "  full set of section notes — contribution, methods, key results, significance.\n"
-            "  The opening summary is generated last, after all section notes are assembled.\n"
-            "  It does not paraphrase the abstract.\n\n"
-            "LEVEL 2 (body): A section-by-section detailed summary that preserves key\n"
-            "  definitions, equations ($$ … $$ delimiters), main theorems (from theory.md),\n"
-            "  and empirical findings (from empirical.md). Each section heading links back\n"
-            "  to the corresponding Citadel reading note via Obsidian [[wikilink]] syntax.\n\n"
-            "NOTATION: Written to a separate <cite_key>-notation.md file. A [[wikilink]]\n"
-            "  is inserted in the main note in place of the inline notation section.\n"
-            "  Any section classified as reference-lookup (notation, glossary) or exceeding\n"
-            "  300 words is also externalized."
+            "Author the final literature note for a paper or book in the Citadel vault.\n\n"
+            "PAPER MODE (default, --mode paper):\n"
+            "  LEVEL 1 (top): A 1–3 paragraph abstract-level summary synthesized from the\n"
+            "    full set of section notes — contribution, methods, key results, significance.\n"
+            "    The opening summary is generated last, after all section notes are assembled.\n"
+            "    It does not paraphrase the abstract.\n\n"
+            "  LEVEL 2 (body): A section-by-section detailed summary that preserves key\n"
+            "    definitions, equations ($$ … $$ delimiters), main theorems (from theory.md),\n"
+            "    and empirical findings (from empirical.md). Each section heading links back\n"
+            "    to the corresponding Citadel reading note via Obsidian [[wikilink]] syntax.\n\n"
+            "  NOTATION: Written to a separate <cite_key>-notation.md file. A [[wikilink]]\n"
+            "    is inserted in the main note in place of the inline notation section.\n\n"
+            "BOOK MODE (--mode book):\n"
+            "  Aggregates per-chapter reading notes into a top-level synthesis note.\n"
+            "  Reads chapter_plan.md from the vault notes directory; includes only chapters\n"
+            "  where include_in_synthesis: true and note frontmatter status: complete.\n"
+            "  Produces five ordered sections: Executive overview, Portfolio/Domain Lens,\n"
+            "  Chapter synopses, Key numbers and projections, Open questions.\n"
+            "  Warns in frontmatter (synthesis_overlength: true) when output exceeds\n"
+            "  synthesis_target_words by more than 20%%."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["paper", "book", "chain_map"],
+        default="paper",
+        help=(
+            "Synthesis mode: 'paper' (default), 'book', or 'chain_map'. "
+            "chain_map produces an 8-section sell-side chain report from _chain_map.json."
+        ),
     )
     parser.add_argument(
         "--cite-key",
         required=True,
         metavar="CITE_KEY",
         help=(
-            "Paper cite key (e.g. demo2026paper). Used to locate paper-bank inputs "
+            "Paper/book cite key (e.g. demo2026book). Used to locate paper-bank inputs "
             "and Citadel reading notes."
         ),
     )
     parser.add_argument(
         "--paper-bank-dir",
-        required=True,
+        default=None,
         metavar="DIR",
         help=(
-            "Path to the paper-bank directory. The script looks for "
-            "<DIR>/<cite_key>/_catalog.yaml first; if absent it tries "
-            "<DIR>/_catalog.yaml directly."
+            "Path to the paper-bank directory (required for --mode paper). "
+            "The script looks for <DIR>/<cite_key>/_catalog.yaml first; if absent it tries "
+            "<DIR>/_catalog.yaml directly. Not used in --mode book."
         ),
     )
     parser.add_argument(
@@ -936,13 +1714,36 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    result = summarize_paper(
-        cite_key=args.cite_key,
-        paper_bank_dir=Path(args.paper_bank_dir).expanduser().resolve(),
-        vault_path=Path(args.vault_path).expanduser().resolve(),
-        output=Path(args.output).expanduser().resolve() if args.output else None,
-        dry_run=args.dry_run,
-    )
+    vault_path = Path(args.vault_path).expanduser().resolve()
+    output = Path(args.output).expanduser().resolve() if args.output else None
+
+    if args.mode == "book":
+        result = synthesize_book(
+            cite_key=args.cite_key,
+            vault_path=vault_path,
+            output=output,
+            dry_run=args.dry_run,
+        )
+    elif args.mode == "chain_map":
+        if not args.paper_bank_dir:
+            parser.error("--paper-bank-dir is required for --mode chain_map")
+        result = synthesize_chain_map(
+            cite_key=args.cite_key,
+            paper_bank_dir=Path(args.paper_bank_dir).expanduser().resolve(),
+            vault_path=vault_path,
+            output=output,
+            dry_run=args.dry_run,
+        )
+    else:
+        if not args.paper_bank_dir:
+            parser.error("--paper-bank-dir is required for --mode paper (the default mode)")
+        result = summarize_paper(
+            cite_key=args.cite_key,
+            paper_bank_dir=Path(args.paper_bank_dir).expanduser().resolve(),
+            vault_path=vault_path,
+            output=output,
+            dry_run=args.dry_run,
+        )
     print(json.dumps(result, indent=2))
 
 

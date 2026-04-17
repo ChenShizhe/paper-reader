@@ -8,6 +8,7 @@ Live mode (M4 stub): snapshots catalog, then exits with a not-implemented messag
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import subprocess
@@ -23,10 +24,24 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from build_catalog import snapshot_catalog
+from chapter_plan_parser import ChapterRow, parse_chapter_plan, validate_chapter_plan
 from context_loader import load_layer_a
 from meta_note_query import query_meta_notes
 
 DispatchMode = Literal["auto", "inline", "subagent"]
+
+# Permitted claim types when claim_domain == "institutional" (from references/modes/book.md)
+_INSTITUTIONAL_CLAIM_TYPES: list[str] = [
+    "theorem",
+    "assumption",
+    "methodology",
+    "empirical",
+    "connection",
+    "limitation",
+    "policy-recommendation",
+    "data-availability",
+    "code-availability",
+]
 
 
 def _normalize_dispatch_mode(value: str | None) -> DispatchMode | None:
@@ -147,6 +162,387 @@ def _build_dispatch_plan(
         dispatch_plan.append(entry)
 
     return dispatch_plan, layer_b_query_results
+
+
+def _get_pdf_page_count(pdf_path: Path) -> int | None:
+    """Return PDF page count via PyMuPDF when available, else None."""
+    try:
+        import fitz  # type: ignore
+        doc = fitz.open(str(pdf_path))
+        count = doc.page_count
+        doc.close()
+        return count
+    except Exception:
+        return None
+
+
+def _build_chapter_prompt(
+    row: ChapterRow,
+    cite_key: str,
+    frontmatter: dict,
+    vault_root: str,
+    source_pdf: str,
+) -> str:
+    """Build the subagent prompt for one chapter."""
+    abs_output_path = str(
+        Path(vault_root) / "literature" / "papers" / cite_key / f"{row.slug}.md"
+    )
+    claim_domain = frontmatter.get("claim_domain", "institutional")
+    if claim_domain == "institutional":
+        claim_types = _INSTITUTIONAL_CLAIM_TYPES
+    else:
+        claim_types = []
+    claim_types_str = ", ".join(f"`{ct}`" for ct in claim_types)
+
+    return f"""# Book Chapter Reading Task
+
+## REQUIRED: Output Path
+Write your chapter note to EXACTLY this path and nowhere else:
+  {abs_output_path}
+
+This follows the convention: citadel/literature/papers/<cite_key>/<slug>.md
+
+## Chapter Metadata
+- cite_key: {cite_key}
+- slug: {row.slug}
+- page_range: {row.page_range}
+- role: {row.role}
+- domain_lens: {row.domain_lens}
+- depth: {row.depth}
+- include_in_synthesis: {row.include_in_synthesis}
+- claim_domain: {claim_domain}
+
+## Source PDF
+{source_pdf}
+
+Read pages {row.page_range} (inclusive).
+
+## Permitted Claim Types ({claim_domain})
+{claim_types_str}
+
+All other claim types are rejected when claim_domain is `{claim_domain}`.
+
+## Output Structure
+Write a Markdown file to `{abs_output_path}` with:
+
+```yaml
+---
+cite_key: {cite_key}
+slug: {row.slug}
+page_range: {row.page_range}
+role: {row.role}
+domain_lens: {row.domain_lens}
+depth: {row.depth}
+status: complete
+---
+```
+
+Followed by:
+1. **Summary** — 2-3 paragraph summary of the chapter content
+2. **Key Claims** — list of claims using only the permitted claim types above
+3. **Domain Lens Notes** — observations through the `{row.domain_lens}` lens
+4. **Connections** — links to related chapters or external work
+"""
+
+
+def _dispatch_chapter(
+    row: ChapterRow,
+    cite_key: str,
+    frontmatter: dict,
+    vault_root: str,
+    source_pdf: str,
+    output_dir: Path,
+    attempt: int = 1,
+) -> tuple[str, bool, str]:
+    """Run one chapter subagent via claude CLI. Returns (slug, success, message)."""
+    prompt = _build_chapter_prompt(
+        row=row,
+        cite_key=cite_key,
+        frontmatter=frontmatter,
+        vault_root=vault_root,
+        source_pdf=source_pdf,
+    )
+    output_file = output_dir / f"{row.slug}.md"
+    try:
+        result = subprocess.run(
+            ["claude", "--print", prompt],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode == 0 and output_file.exists():
+            return row.slug, True, "ok"
+        if result.returncode == 0:
+            return row.slug, False, f"subagent exited 0 but {output_file} not written"
+        return row.slug, False, f"subagent exited {result.returncode}: {result.stderr[:200]}"
+    except subprocess.TimeoutExpired:
+        return row.slug, False, "subagent timed out after 600s"
+    except FileNotFoundError:
+        return row.slug, False, "claude CLI not found on PATH"
+    except Exception as exc:
+        return row.slug, False, str(exc)
+
+
+def _dispatch_chapter_with_retry(
+    row: ChapterRow,
+    cite_key: str,
+    frontmatter: dict,
+    vault_root: str,
+    source_pdf: str,
+    output_dir: Path,
+) -> tuple[str, bool, str]:
+    """Dispatch a chapter subagent, retrying once on failure.
+
+    On second failure writes a status:failed note for the chapter and returns
+    (slug, False, message) so siblings can continue.
+    """
+    for attempt in range(1, 3):
+        slug, success, message = _dispatch_chapter(
+            row=row,
+            cite_key=cite_key,
+            frontmatter=frontmatter,
+            vault_root=vault_root,
+            source_pdf=source_pdf,
+            output_dir=output_dir,
+            attempt=attempt,
+        )
+        if success:
+            return slug, True, message
+        if attempt == 1:
+            print(f"  Retrying chapter {row.slug} (attempt 2)...", file=sys.stderr)
+
+    # Both attempts failed — write a failed status note so downstream tools know.
+    failed_note = output_dir / f"{row.slug}.md"
+    try:
+        failed_note.write_text(
+            f"---\n"
+            f"cite_key: {cite_key}\n"
+            f"slug: {row.slug}\n"
+            f"page_range: {row.page_range}\n"
+            f"role: {row.role}\n"
+            f"domain_lens: {row.domain_lens}\n"
+            f"depth: {row.depth}\n"
+            f"status: failed\n"
+            f"error: {message}\n"
+            f"---\n\n"
+            "Chapter processing failed after 2 attempts.\n",
+            encoding="utf-8",
+        )
+    except Exception as write_exc:
+        print(
+            f"  WARNING: could not write failed note for {row.slug}: {write_exc}",
+            file=sys.stderr,
+        )
+    return slug, False, message
+
+
+def _chain_map_run(args: argparse.Namespace) -> int:
+    """Chain-map mode: extract exhibit rows from translated_full.md and render report."""
+    import exhibit_extractor as _ee
+    import ticker_normalizer as _tn
+    from summarize_paper import render_chain_map_report
+
+    paper_bank_root = Path(os.path.expanduser(args.paper_bank_root))
+    cite_key = args.cite_key
+    paper_dir = paper_bank_root / cite_key
+    vault_root = os.path.expanduser(args.vault_root)
+
+    # 1. Read translated_full.md (born-digital PyMuPDF output).
+    translated_path = paper_dir / "translated_full.md"
+    if not translated_path.exists():
+        print(
+            f"Error: translated_full.md not found at {translated_path}. "
+            "Run translate_paper.py (PyMuPDF path) first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    text = translated_path.read_text(encoding="utf-8")
+
+    # 2. Detect exhibits and extract rows.
+    spans = _ee.detect_exhibits(text)
+    if not spans:
+        print("No exhibits detected in translated_full.md.", file=sys.stderr)
+
+    all_rows: list[dict] = []
+    editorial_notes: list[str] = []
+
+    for span in spans:
+        result = _ee.extract_rows(span)
+
+        # 3a. Image-heavy / empty exhibits produce an editorial credibility note.
+        if result.graphical_only or not result.rows:
+            note = result.note or (
+                f"Exhibit {span.exhibit_number}: no extractable rows "
+                "(likely graphical-only). Forward to Editorial for manual review."
+            )
+            editorial_notes.append(note)
+            print(f"  Editorial note (Exhibit {span.exhibit_number}): {note}", file=sys.stderr)
+            continue
+
+        # 3b. Normalize each row's ticker; keep original + normalized + format_type.
+        for row in result.rows:
+            raw_ticker = row.get("ticker", "NA")
+            if raw_ticker and raw_ticker != "NA":
+                normalized, format_type = _tn.normalize_ticker(raw_ticker)
+                row["original_ticker"] = raw_ticker
+                row["normalized_ticker"] = normalized
+                row["format_type"] = format_type
+            else:
+                row["original_ticker"] = raw_ticker
+                row["normalized_ticker"] = raw_ticker
+                row["format_type"] = "na"
+        all_rows.extend(result.rows)
+
+    # 4. Dedup rows across exhibits.
+    deduped_rows = _ee.dedup_rows(all_rows)
+
+    # 5. Optional watchlist cross-source.
+    cross_source_result: dict | None = None
+    if args.watchlist:
+        try:
+            import watchlist_cross_source as _wcs
+            cross_source_result = _wcs.cross_source(deduped_rows, args.watchlist)
+        except ImportError:
+            print(
+                "WARNING: watchlist_cross_source module not available; "
+                "skipping cross-source analysis.",
+                file=sys.stderr,
+            )
+
+    # 6. Hand structured rows + cross-source result to summarize_paper for report rendering.
+    output_path = (
+        Path(vault_root) / "literature" / "papers" / f"{cite_key}-chain-map.md"
+    )
+    result_summary = render_chain_map_report(
+        cite_key=cite_key,
+        rows=deduped_rows,
+        editorial_notes=editorial_notes,
+        cross_source_result=cross_source_result,
+        output_path=output_path,
+        dry_run=args.dry_run,
+    )
+    print(json.dumps(result_summary, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _book_run(args: argparse.Namespace) -> int:
+    """Book-mode dispatcher: load chapter plan, fan out chapter subagents in parallel."""
+    chapter_plan_path = Path(args.chapter_plan) if args.chapter_plan else None
+    if not chapter_plan_path or not chapter_plan_path.exists():
+        print(
+            f"Error: chapter plan not found at {chapter_plan_path!r}. "
+            "Pass --chapter-plan <path> for book mode.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # 1. Load chapter plan.
+    try:
+        frontmatter, rows = parse_chapter_plan(chapter_plan_path)
+    except Exception as exc:
+        print(f"Error parsing chapter plan: {exc}", file=sys.stderr)
+        return 1
+
+    cite_key = frontmatter["cite_key"]
+    source_pdf = frontmatter["source_pdf"]
+    vault_root = os.path.expanduser(args.vault_root)
+
+    # 2. Validate against actual PDF page count when PyMuPDF is available.
+    pdf_path = Path(os.path.expanduser(source_pdf))
+    pdf_page_count = _get_pdf_page_count(pdf_path)
+    if pdf_page_count is not None:
+        try:
+            validate_chapter_plan(rows, pdf_page_count)
+        except ValueError as exc:
+            print(f"Chapter plan validation failed: {exc}", file=sys.stderr)
+            return 1
+    else:
+        print(
+            "WARNING: PyMuPDF not available; skipping PDF page-count validation.",
+            file=sys.stderr,
+        )
+
+    # 3. Filter to dispatchable chapters (depth != skip).
+    active_rows = [r for r in rows if r.depth != "skip"]
+    if not active_rows:
+        print("No chapters to dispatch (all rows have depth=skip).", file=sys.stderr)
+        return 0
+
+    # Ensure output directory exists.
+    output_dir = Path(vault_root) / "literature" / "papers" / cite_key
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    concurrency: int = args.book_concurrency
+    print(
+        f"Book mode: dispatching {len(active_rows)} chapter(s) for {cite_key} "
+        f"(concurrency={concurrency})",
+        file=sys.stderr,
+    )
+
+    # 4. Parallel dispatch with concurrency cap.
+    results: dict[str, str] = {}
+    failures: list[str] = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        future_to_slug = {
+            executor.submit(
+                _dispatch_chapter_with_retry,
+                row=row,
+                cite_key=cite_key,
+                frontmatter=frontmatter,
+                vault_root=vault_root,
+                source_pdf=str(pdf_path),
+                output_dir=output_dir,
+            ): row.slug
+            for row in active_rows
+        }
+
+        for future in concurrent.futures.as_completed(future_to_slug):
+            slug = future_to_slug[future]
+            try:
+                _, success, message = future.result()
+                if success:
+                    results[slug] = "passed"
+                    print(f"  OK: {slug}", file=sys.stderr)
+                else:
+                    failures.append(slug)
+                    print(f"  FAILED: {slug}: {message}", file=sys.stderr)
+            except Exception as exc:
+                failures.append(slug)
+                print(f"  FAILED: {slug}: {exc}", file=sys.stderr)
+
+    # 5 & 6. Post-dispatch sanity check: expected slugs vs actual files.
+    expected_slugs = {r.slug for r in active_rows}
+    actual_files = {f.stem for f in output_dir.glob("*.md")}
+    missing = expected_slugs - actual_files
+    unexpected = actual_files - expected_slugs
+
+    if missing:
+        print(
+            f"Sanity check MISMATCH: {len(missing)} expected slug(s) missing: {sorted(missing)}",
+            file=sys.stderr,
+        )
+    if unexpected:
+        print(
+            f"Sanity check: {len(unexpected)} unexpected file(s) in output dir: {sorted(unexpected)}",
+            file=sys.stderr,
+        )
+    if not missing and not unexpected:
+        print("Sanity check: all expected chapter files present.", file=sys.stderr)
+
+    if failures:
+        print(
+            f"Book mode completed with {len(failures)} failure(s): {failures}. "
+            "Pipeline will continue — downstream steps may produce partial results.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"Book mode completed successfully: {len(results)} chapter(s) processed.",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def _dry_run(args: argparse.Namespace) -> int:
@@ -414,12 +810,40 @@ def _build_parser() -> argparse.ArgumentParser:
             "Default auto resolves from PAPER_READER_LLM_DISPATCH / PAPER_READER_USE_SUBAGENT."
         ),
     )
+    parser.add_argument(
+        "--mode",
+        default="paper",
+        choices=["paper", "book", "chain_map"],
+        help="Pipeline mode forwarded from run_pipeline (default: paper).",
+    )
+    parser.add_argument(
+        "--chapter-plan",
+        default="",
+        help="Path to chapter plan file (forwarded from run_pipeline).",
+    )
+    parser.add_argument(
+        "--watchlist",
+        default="",
+        help="Path to watchlist file (forwarded from run_pipeline).",
+    )
+    parser.add_argument(
+        "--book-concurrency",
+        type=int,
+        default=5,
+        dest="book_concurrency",
+        help="Maximum number of chapter subagents to run in parallel (book mode, default: 5).",
+    )
     return parser
 
 
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.mode == "book":
+        sys.exit(_book_run(args))
+    if args.mode == "chain_map":
+        sys.exit(_chain_map_run(args))
 
     if args.dry_run:
         sys.exit(_dry_run(args))

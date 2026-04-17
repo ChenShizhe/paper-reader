@@ -84,6 +84,17 @@ Never let semantic review invent metadata or override Level 1 structural facts.
 - `medium`: metadata inconsistency that should be reviewed soon
 - `low`: formatting or completeness issue
 
+## Claim Domain and Validator Scope
+
+`claim_domain` (set via `--claim-domain` in `build_catalog.py`) governs which
+claim-type subset validators enforce during extraction review — for example,
+academic documents are checked only against the 8 academic claim types, while
+industry documents may also include `policy-recommendation`, `projection`,
+`supply-chain-fact`, and `company-thesis`. This subsetting applies to claim
+validation only; it does not affect citation validation. Citation structural
+checks (BibTeX integrity, cite-key consistency, Level 1 offline checks) run
+identically regardless of `claim_domain`.
+
 ## Operational Rules
 - Offline Level 1 validation is the extraction gate.
 - Online checks are additive and opt-in.

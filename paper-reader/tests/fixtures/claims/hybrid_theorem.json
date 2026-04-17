@@ -1,0 +1,16 @@
+{
+  "schema_version": "2",
+  "cite_key": "hybridthm2024",
+  "canonical_id": "manual:hybridthm2024",
+  "content_status": "full",
+  "extraction_confidence": "high",
+  "claims": [
+    {
+      "type": "theorem",
+      "source_anchor": {
+        "locator": "p. 1",
+        "confidence": "high"
+      }
+    }
+  ]
+}

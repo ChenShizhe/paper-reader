@@ -63,6 +63,7 @@ class SegmentEntry(BaseModel):
 
 
 class CatalogSchema(BaseModel):
+    claim_domain: str = "academic"
     paper: PaperMetadata
     sections: List[SectionEntry]
     segments: List[SegmentEntry]

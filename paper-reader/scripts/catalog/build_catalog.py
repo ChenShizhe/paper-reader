@@ -164,7 +164,7 @@ def _group_into_sections(segments: List[Dict]) -> List[Dict]:
 
 # ── Main builder ───────────────────────────────────────────────────────────────
 
-def build_catalog(cite_key: str, work_dir: Path) -> CatalogSchema:
+def build_catalog(cite_key: str, work_dir: Path, claim_domain: str = "academic") -> CatalogSchema:
     manifest_path = work_dir / 'segments' / '_segment_manifest.json'
     if not manifest_path.exists():
         raise FileNotFoundError(f'Manifest not found: {manifest_path}')
@@ -267,7 +267,7 @@ def build_catalog(cite_key: str, work_dir: Path) -> CatalogSchema:
                     " from the catalog — check the manifest and normalization logic."
                 )
 
-    return CatalogSchema(paper=paper, sections=sections, segments=segments)
+    return CatalogSchema(claim_domain=claim_domain, paper=paper, sections=sections, segments=segments)
 
 
 def main() -> None:
@@ -278,10 +278,16 @@ def main() -> None:
     parser.add_argument(
         '--work-dir', required=True, help='Paper working directory'
     )
+    parser.add_argument(
+        '--claim-domain',
+        default='academic',
+        choices=['academic', 'institutional', 'sell_side', 'hybrid'],
+        help='Claim domain written to catalog frontmatter (default: academic).',
+    )
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir).expanduser().resolve()
-    catalog = build_catalog(args.cite_key, work_dir)
+    catalog = build_catalog(args.cite_key, work_dir, claim_domain=args.claim_domain)
 
     catalog_dict = catalog.model_dump()
     output_path = work_dir / '_catalog.yaml'

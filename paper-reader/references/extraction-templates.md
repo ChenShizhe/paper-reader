@@ -246,3 +246,166 @@ Matching sidecar:
   it should remain unresolved until that paper is ingested.
 - Regeneration must be idempotent: unchanged metadata + unchanged sidecar should
   yield the same markdown block and the same `auto_block_hash`.
+
+---
+
+## Extended Claim Types
+
+The following claim types extend the base set for industry reports, energy-transition
+documents, and equity-research notes. They share the same `source_anchor` structure
+as core claim types.
+
+### Claim Type: `policy-recommendation`
+
+Used when a document directs a specific body to take a defined action within a time
+horizon, driven by an identified rationale.
+
+**Required fields:**
+
+| Field | Description |
+|---|---|
+| `recommended_to` | The entity or class of entities addressed (e.g., government, regulator, utility) |
+| `time_horizon` | Deadline or urgency framing (e.g., "by 2030", "within this decade", "immediately") |
+| `driver` | The underlying rationale or pressure motivating the recommendation |
+
+**Example (IEA World Energy Outlook style):**
+
+```json
+{
+  "type": "policy-recommendation",
+  "text": "Governments should triple global renewable energy capacity to 11,000 GW by 2030 to stay on track for net-zero emissions by 2050.",
+  "recommended_to": "national governments",
+  "time_horizon": "by 2030",
+  "driver": "NZE pathway requirement; current capacity trajectory falls 60% short of the 2030 milestone",
+  "source_anchor": {
+    "source_type": "pdf",
+    "locator": "IEA World Energy Outlook 2023, Executive Summary, p. 15",
+    "confidence": "high"
+  }
+}
+```
+
+---
+
+### Claim Type: `projection`
+
+Used when a document provides a forward-looking quantitative estimate under a named
+scenario and set of assumptions.
+
+**Required fields:**
+
+| Field | Description |
+|---|---|
+| `scenario_label` | The scenario name as used by the source (e.g., "Stated Policies Scenario", "Net Zero Emissions by 2050") |
+| `horizon_year` | The year to which the projection refers |
+| `base_value` | The reference or current value being projected from (with unit) |
+| `driver_assumptions` | Key assumptions that underpin the projection |
+
+**Example (IEA Base Case / Stated Policies Scenario):**
+
+```json
+{
+  "type": "projection",
+  "text": "Under the Stated Policies Scenario, global CO₂ emissions from the energy sector reach 37 Gt in 2030, roughly flat versus 2022 levels.",
+  "scenario_label": "Stated Policies Scenario (STEPS)",
+  "horizon_year": 2030,
+  "base_value": "36.8 Gt CO₂ (2022 actual)",
+  "driver_assumptions": [
+    "Nationally Determined Contributions implemented as announced but not beyond",
+    "No additional policy tightening post-2023",
+    "Continued coal-to-gas switching in Asia"
+  ],
+  "source_anchor": {
+    "source_type": "pdf",
+    "locator": "IEA World Energy Outlook 2023, Chapter 3, Table 3.2",
+    "confidence": "high"
+  }
+}
+```
+
+---
+
+### Claim Type: `supply-chain-fact`
+
+Used for structural facts about a supply chain—sourcing shares, processing
+concentrations, logistics dependencies—where the claim's credibility depends on
+how it was attested.
+
+**Required fields:**
+
+| Field | Description |
+|---|---|
+| `attestation_source` | Who produced or directly measured the underlying data (e.g., USGS, IEA, company disclosure) |
+| `verifiability` | One of `independent` (third-party audit or government statistics), `same-publisher` (self-reported by the entity covered), or `unattributed` (no clear primary source cited) |
+
+**Example (rare-earth processing concentration):**
+
+```json
+{
+  "type": "supply-chain-fact",
+  "text": "China accounts for approximately 85–90% of global rare-earth element processing capacity, creating single-point-of-failure risk for permanent-magnet supply chains.",
+  "attestation_source": "USGS Mineral Commodity Summaries 2023; IEA Critical Minerals Market Review 2023",
+  "verifiability": "independent",
+  "source_anchor": {
+    "source_type": "pdf",
+    "locator": "IEA Critical Minerals Market Review 2023, Chapter 2, Figure 2.4",
+    "confidence": "high"
+  }
+}
+```
+
+---
+
+### Claim Type: `company-thesis`
+
+Used in equity-research and investment-memo contexts to capture an analyst's
+forward-looking view on a specific publicly traded company, including the
+investment tier and geographic scope.
+
+**Required fields:**
+
+| Field | Description |
+|---|---|
+| `ticker` | Exchange-qualified ticker symbol (e.g., `002050.SZ`) |
+| `thesis_note` | One- or two-sentence rationale for the investment view |
+| `tier` | Analyst conviction tier as used in the source (e.g., `top-pick`, `outperform`, `neutral`, `underperform`) |
+| `geography` | Primary market or operating geography of the company |
+
+**Example (Sanhua humanoid-actuator thesis):**
+
+```json
+{
+  "type": "company-thesis",
+  "text": "Sanhua Intelligent Controls is positioned as a primary beneficiary of humanoid-robot actuator demand given its thermal-management and micro-channel heat-exchanger expertise, which translates directly to joint-cooling requirements in next-generation bipedal robots.",
+  "ticker": "002050.SZ",
+  "thesis_note": "Sanhua's existing EV thermal-management relationships with Tesla and BYD provide a direct commercial pathway into humanoid-robot thermal and actuation sub-systems; margin uplift from robotics could reach 400–600 bps by 2027.",
+  "tier": "top-pick",
+  "geography": "China (A-share)",
+  "source_anchor": {
+    "source_type": "pdf",
+    "locator": "CICC Robotics Supply Chain Initiation, March 2024, p. 34",
+    "confidence": "medium"
+  }
+}
+```
+
+---
+
+## Disambiguation: `company-thesis` vs `supply-chain-fact`
+
+These two claim types can cover overlapping subject matter (e.g., a company that
+dominates a supply-chain node) but serve different epistemic roles:
+
+| Dimension | `company-thesis` | `supply-chain-fact` |
+|---|---|---|
+| **Binding identifier** | Ticker-bound — anchored to a specific listed entity | Structural — describes an industry node, not a single stock |
+| **Subjectivity** | Inherently subjective; reflects analyst conviction and investment tier | Intended to be objective; relies on attestation from a named source |
+| **Attestation** | No `attestation_source` field; credibility flows from analyst reputation and disclosed methodology | Requires `attestation_source` and explicit `verifiability` rating |
+| **Decay rate** | High — thesis relevance changes with earnings, guidance, and market re-rating | Lower — structural facts (e.g., processing share) shift over years, not quarters |
+| **Typical source** | Sell-side initiation note, investment memo, conference presentation | Government statistics (USGS, IEA), industry body report, audited company filing |
+
+**When in doubt:** if the claim can be independently verified against a government
+or third-party data source and does not depend on a specific stock view, use
+`supply-chain-fact` with `attestation_source` filled in. If the claim is a forward
+view that would change if the company were acquired or de-listed, use
+`company-thesis`.

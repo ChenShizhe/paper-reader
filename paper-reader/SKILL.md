@@ -116,6 +116,215 @@ Notes:
 - `--source-path` can point to a source directory or a single file. For PDF
   files, the parent directory is used for segmentation input.
 
+## Modes
+
+Select a mode before starting the pipeline. The default is `paper`.
+
+| Mode | Description |
+|------|-------------|
+| `paper` | Default. Processes a single academic paper through the full 15-step pipeline. See [references/modes/paper.md](references/modes/paper.md). |
+| `book` | Processes a book or long-form document with chapter-level segmentation. See [references/modes/book.md](references/modes/book.md). |
+| `chain_map` | Builds a citation chain map across multiple related papers. See [references/modes/chain_map.md](references/modes/chain_map.md). |
+
+### Book mode walkthrough
+
+Use `book` mode for long-form institutional documents (monographs, annual
+reports, multi-chapter research volumes) that require chapter-level
+segmentation and cross-chapter synthesis.
+
+#### One-command invocation
+
+```bash
+python3 scripts/run_pipeline.py \
+  --mode book \
+  --chapter-plan plans/iea_weo_2025.md \
+  --source downloads/iea_weo_2025.pdf \
+  --cite-key iea_weo_2025 \
+  --vault-root "<VAULT_ROOT>" \
+  --paper-bank-dir "<PAPER_BANK>/iea_weo_2025"
+```
+
+#### What to prepare: the chapter plan
+
+Create a chapter plan Markdown file before running. The plan has two parts:
+
+**YAML frontmatter** — declares `cite_key`, `source_pdf`, and `claim_domain`
+(use `institutional` for book mode), plus optional `page_offset` and
+`synthesis_target_words`:
+
+```yaml
+---
+cite_key: iea_weo_2025
+source_pdf: downloads/iea_weo_2025.pdf
+claim_domain: institutional
+page_offset: 0
+synthesis_target_words: 5000
+---
+```
+
+**Chapter table** — one row per chapter with six required columns:
+
+| Column | Purpose |
+|---|---|
+| `slug` | Unique short identifier; names the output file |
+| `page_range` | Inclusive physical page range, e.g. `19-55` |
+| `depth` | `deep` (full extraction), `summary` (headlines only), or `skip` |
+| `include_in_synthesis` | `true` to merge into the synthesis; `false` to exclude |
+| `domain_lens` | Thematic label; must be consistent across all `include_in_synthesis: true` rows |
+| `role` | Human-readable chapter role (e.g. `scenario_chapter`) |
+
+See [references/chapter-plan-schema.md](references/chapter-plan-schema.md) for the full
+schema, validation rules, and a worked example.
+
+#### What the pipeline produces
+
+For a plan with N non-skipped chapters:
+
+- **N chapter notes** — `extractions/<cite_key>/chapters/<slug>.json`
+- **One synthesis note** — `extractions/<cite_key>/synthesis.md` with
+  `## Overview`, `## Key Findings`, `## Policy Recommendations`,
+  `## Projections`, and `## Gaps`
+- **Vault summary note** — `<VAULT_ROOT>/papers/<cite_key>.md`
+- **Claims sidecar** — `<VAULT_ROOT>/claims/<cite_key>.json` (merged from
+  all `include_in_synthesis: true` chapters)
+
+Chapters with `depth: skip` produce no output and appear only in `## Gaps`.
+
+#### Concurrency and retry
+
+The dispatcher runs at most **5** chapter subagents concurrently; additional
+chapters queue and launch as slots free. A failing chapter is retried once. On
+a second failure the chapter is marked `failed` in the run manifest and
+recorded in synthesis `## Gaps`; the pipeline continues with remaining chapters.
+
+#### Claim types
+
+Book mode enforces `claim_domain: institutional`. Permitted types: `theorem`,
+`assumption`, `methodology`, `empirical`, `connection`, `limitation`,
+`policy-recommendation`, `projection`, `data-availability`, `code-availability`.
+The types `company-thesis` and `supply-chain-fact` are rejected by the validator.
+
+Per-chapter sidecars use `<cite_key>__<slug>` as the claim namespace. Cross-chapter
+`connection` claims reference other chapters via `<cite_key>__<slug>:claim:<index>`.
+See [references/modes/book.md](references/modes/book.md) for the full claim-type
+table and cross-chapter connection format.
+
+### chain_map mode walkthrough
+
+Use `chain_map` mode for sell-side equity research documents — initiation notes,
+sector surveys, supply-chain thematic reports — that list multiple companies with
+tickers in numbered exhibit tables. The pipeline extracts a structured company
+inventory from every exhibit, normalises tickers to exchange-qualified form, and
+writes a single Markdown report with an embedded fenced CSV.
+
+#### One-command invocation
+
+```bash
+python3 scripts/run_pipeline.py \
+  --mode chain_map \
+  --source downloads/humanoid_100.pdf \
+  --cite-key cicc_humanoid_2024 \
+  --watchlist watchlists/my_portfolio.md
+```
+
+`--watchlist` is optional (see below). `--cite-key` defaults to a slugified
+form of the PDF filename when omitted.
+
+#### What to prepare
+
+**Source PDF (required).** A born-digital PDF with a text layer. Before
+extraction, the pipeline runs `scripts/pdf_probe.py` to confirm a text layer
+is present. If the probe returns `text_layer: false` the run aborts with
+`IMAGE_ONLY_PDF` and a recommendation to OCR the file first.
+
+**Watchlist (optional).** A Markdown file whose body contains a GFM pipe table
+with at least two columns: `ticker` (exchange-qualified, e.g. `002050.SZ`) and
+`name`. Additional columns (`tier`, `track`, `notes`) are passed through
+unchanged. Minimal example:
+
+```markdown
+| ticker    | name                        |
+|-----------|-----------------------------|
+| 002050.SZ | Sanhua Intelligent Controls |
+| NVDA      | NVIDIA Corporation          |
+```
+
+When supplied, every company found in both the PDF and the watchlist receives
+`in_watchlist: true` in the inventory. Companies on the watchlist that do not
+appear in any exhibit are listed in a `## Watchlist Gaps` output section.
+
+#### What the pipeline produces
+
+The run writes a single report file:
+
+```
+extractions/<cite_key>/chain_map.md
+```
+
+The report contains eight top-level sections in fixed order:
+`## Overview`, `## Company Inventory`, `## Supply-Chain Map`,
+`## Investment Theses`, `## Watchlist Overlap`, `## Unknown Tickers`,
+`## Extraction Notes`, and `## data_sections`.
+
+The `## Company Inventory` section embeds a fenced CSV block inside a
+collapsible `<details>` element. The CSV has nine required columns:
+`ticker_normalised`, `ticker_raw`, `exchange`, `company_name`, `exhibit_num`,
+`tier`, `target_price`, `supply_chain_role`, `in_watchlist`. Publisher-specific
+extension columns (prefixed `x_<publisher>_`) may follow.
+
+The `## data_sections` section is a fenced YAML block that acts as the
+machine-readable contract for downstream skills. It records counts
+(`company_count`, `normalised_count`, `unknown_ticker_count`, `exhibit_count`)
+and paths (`inventory_path`, `claims_path`) so that downstream consumers can
+navigate the report without relying on section position.
+
+A claims sidecar is also written at `claims/<cite_key>-claims.json` (see
+§ Claim types below).
+
+#### Ticker normalization and edge cases
+
+`scripts/ticker_normalizer.py` converts raw ticker strings to
+exchange-qualified form using a priority chain:
+
+1. **Known suffix present** — e.g. `002050.SZ` accepted as-is after suffix
+   validation.
+2. **Country shorthand** — e.g. `0700-HK` → `0700.HK`; `6954-JP` → `6954.T`.
+3. **Bare numeric** — 6-digit starting with `0`/`3` → `.SZ`; `6` → `.SS`; 4–5
+   digit → `.HK` (candidate) or `.T`.
+4. **Unresolvable** — `ticker_normalised` set to `null`, `exchange` to
+   `unknown`; company retained in inventory and listed in `## Unknown Tickers`.
+
+Notable edge cases:
+- **Empty exhibits** — exhibit header detected but no rows pass the filter.
+  Counted in `data_sections.empty_exhibit_count`; listed in
+  `## Extraction Notes`. No rows emitted; pipeline continues.
+- **Image-only pages** — a single page in an otherwise born-digital PDF with
+  fewer than 20 extracted characters. Logged as `image-only page`; non-fatal
+  (exit code 0).
+- **Duplicate companies** — same `ticker_normalised` appears in multiple
+  exhibits. Merged into one inventory row; `exhibit_num` becomes a
+  comma-separated list (e.g. `3,7`); `tier` and `target_price` taken from the
+  first exhibit.
+- **Unknown tickers** — confidence is degraded one level (`high` → `medium`,
+  `medium` → `low`). A `normalization_warning` field is added to the
+  corresponding `company-thesis` claim; the pipeline does not abort.
+
+#### Claim types
+
+`chain_map` mode sets `claim_domain: sell_side`. The primary claim type is
+`company-thesis` — one entry per company with a non-null `tier` and a
+`supply_chain_role`. Additional permitted types: `projection`,
+`supply-chain-fact`, `methodology`, `empirical`, `connection`, `limitation`,
+`data-availability`. The types `theorem`, `assumption`,
+`policy-recommendation`, and `code-availability` are rejected by
+`validate_extraction.py`.
+
+See [references/modes/chain_map.md](references/modes/chain_map.md) and
+[references/chain-map-schema.md](references/chain-map-schema.md) for the full
+field definitions, data_sections contract, and backwards-compatibility rules.
+
+---
+
 ## Workflow
 
 This skill executes a pipeline beginning with a reading plan stage (Step 0)
@@ -267,6 +476,46 @@ python3 skills/paper-reader/scripts/manage_paper_bank.py \
 ### Step 3 — Translate paper to structured markdown
 
 Convert the best available source to a unified markdown representation.
+
+**Translator dispatch.** Before translation begins, `translate_paper.py` runs a
+lightweight probe (`pdf_probe.py`) that inspects PDF producer/creator metadata
+and samples the embedded text layer to classify the document:
+
+- **Born-digital PDFs** — producer metadata and a dense text layer indicate a
+  natively digital document. These route to **PyMuPDF**, which extracts text
+  directly from the PDF object model (typically under 2 seconds). PyMuPDF is
+  chosen when the probe's `is_born_digital` score exceeds the confidence
+  threshold.
+- **Scan-like PDFs** — sparse or absent text layer, or producer metadata
+  consistent with a scanner or image-based workflow. These route to **MinerU**,
+  which applies layout analysis and OCR for a higher-fidelity extraction
+  (current default behavior for scanned papers).
+
+**CLI overrides.** Automatic dispatch can be overridden per invocation:
+- `--force-pymupdf` — always use PyMuPDF regardless of probe result.
+- `--force-mineru` — always use MinerU regardless of probe result.
+
+**PyMuPDF trade-offs.** When PyMuPDF is selected (automatically or via
+`--force-pymupdf`), the following limitations apply and are recorded in the
+translation manifest:
+- Figures and embedded images are **not** extracted; figure captions are
+  retained as text only.
+- Complex multi-column table layouts may be merged into a single column or
+  produce garbled row order.
+
+Use `--force-mineru` for papers where table fidelity or figure extraction is
+critical.
+
+**Translation manifest fields.** After translation, `_translation_manifest.json`
+is written with the following fields (among others):
+- `translator_used` — `"pymupdf"` or `"mineru"`.
+- `reason` — human-readable explanation of why the translator was chosen
+  (e.g., `"born-digital: probe confidence 0.94"` or `"forced via CLI flag"`).
+- `probe_metadata` — raw output from `pdf_probe.py`: producer string, creator
+  string, sampled text density, and `is_born_digital` score.
+- `trade_offs_disclosed` — list of trade-off strings recorded when PyMuPDF is
+  used (empty list for MinerU paths).
+
 After translation, scan the translated text for "Keywords:" or "Key words:"
 sections and extract author-provided keywords to
 `<PAPER_BANK>/<cite_key>/author_keywords.txt`.
@@ -278,7 +527,8 @@ python3 skills/paper-reader/scripts/translate_paper.py \
   --output "<PAPER_BANK>/<cite_key>/translated_full.md"
 ```
 
-**Output:** `translated_full.md`, `_translation_manifest.json`,
+**Output:** `translated_full.md`, `_translation_manifest.json` (includes
+`translator_used`, `reason`, `probe_metadata`, `trade_offs_disclosed`),
 `_translation_warnings.log`, `_theorem_index.json`, `author_keywords.txt`
 (when keywords are found in the source).
 
@@ -309,8 +559,11 @@ python3 skills/paper-reader/scripts/build_catalog.py \
   --metadata-json "<WORK_ROOT>/tmp/<cite_key>-metadata.json" \
   --segment-index "<PAPER_BANK>/<cite_key>/segments/_index.json" \
   --vault-root "<VAULT_ROOT>" \
+  --claim-domain "<academic|book|industry>" \
   --output "<VAULT_ROOT>/<cite_key>-catalog.md"
 ```
+
+`--claim-domain` controls which claim-type subset the catalog records as expected for this document. Default: `academic`.
 
 **Output:** `citadel/literature/<cite_key>-catalog.md` (status: draft).
 
@@ -411,6 +664,14 @@ python3 skills/paper-reader/scripts/summarize_paper.py \
   --vault-root "<VAULT_ROOT>" \
   --output "<VAULT_ROOT>/papers/<cite_key>.md"
 ```
+
+The v2 claims JSON supports 12 claim types. The 8 academic types apply to all documents:
+`theorem`, `assumption`, `methodology`, `empirical`, `connection`, `limitation`,
+`data-availability`, `code-availability`. Four extended types apply to non-academic
+domains (industry reports, energy-transition documents, equity research):
+`policy-recommendation`, `projection`, `supply-chain-fact`, `company-thesis`.
+See [references/extraction-templates.md § Extended Claim Types and the Disambiguation note](references/extraction-templates.md)
+for field requirements and examples.
 
 **Output:**
 - `citadel/papers/<cite_key>.md` — final polished summary note (with `author_keywords`, `summary`, `methods` in frontmatter)

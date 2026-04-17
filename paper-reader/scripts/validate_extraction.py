@@ -51,7 +51,35 @@ CLAIM_TYPES = {
     "limitation",
     "data-availability",
     "code-availability",
+    "policy-recommendation",
+    "projection",
+    "supply-chain-fact",
+    "company-thesis",
 }
+CLAIM_TYPE_SUBSETS: dict[str, set[str]] = {
+    "academic": {
+        "theorem", "assumption", "methodology", "empirical",
+        "connection", "limitation", "data-availability", "code-availability",
+    },
+    "institutional": {
+        "policy-recommendation", "projection", "supply-chain-fact",
+        "empirical", "connection", "limitation",
+    },
+    "sell_side": {
+        "company-thesis", "supply-chain-fact", "projection",
+        "policy-recommendation", "connection", "limitation",
+    },
+}
+CLAIM_TYPE_SUBSETS["hybrid"] = set().union(*CLAIM_TYPE_SUBSETS.values())
+
+REQUIRED_FIELDS_BY_TYPE: dict[str, list[str]] = {
+    "policy-recommendation": ["recommended_to", "time_horizon", "driver"],
+    "projection": ["scenario_label", "horizon_year", "base_value", "driver_assumptions"],
+    "supply-chain-fact": ["attestation_source", "verifiability"],
+    "company-thesis": ["ticker", "thesis_note", "tier", "geography"],
+}
+VERIFIABILITY_VALUES = {"independent", "same-publisher", "unattributed"}
+
 ALLOWED_CONTENT_STATUS = {"full", "partial", "metadata-only"}
 BIB_ENTRY_RE = re.compile(r"@\w+\{([^,\s]+),")
 
@@ -94,6 +122,22 @@ def parse_args() -> argparse.Namespace:
             "segments/_segment_manifest.json, _summary_layers.json, per-section "
             "note readiness (intro.md), and summary note presence in Citadel."
         ),
+    )
+    parser.add_argument(
+        "--mode",
+        default="paper",
+        choices=["paper", "book", "chain_map"],
+        help="Pipeline mode forwarded from run_pipeline (default: paper).",
+    )
+    parser.add_argument(
+        "--chapter-plan",
+        default="",
+        help="Path to chapter plan file (forwarded from run_pipeline).",
+    )
+    parser.add_argument(
+        "--watchlist",
+        default="",
+        help="Path to watchlist file (forwarded from run_pipeline).",
     )
     args = parser.parse_args()
     resolved_vault_root = args.vault_root_flag or args.vault_root
@@ -142,7 +186,30 @@ def parse_bibtex_keys(path: Path) -> list[str]:
     return BIB_ENTRY_RE.findall(path.read_text(encoding="utf-8"))
 
 
-def validate_claim_record(path: Path, expected_cite_key: str, expected_canonical_id: str) -> list[str]:
+def _read_claim_domain(catalog_path: Path) -> str:
+    """Return claim_domain from _catalog.yaml paper section, defaulting to 'academic'."""
+    if not catalog_path.exists():
+        return "academic"
+    try:
+        import yaml  # noqa: PLC0415
+
+        data = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            paper_meta = data.get("paper") or {}
+            domain = paper_meta.get("claim_domain")
+            if domain:
+                return str(domain)
+    except Exception:
+        pass
+    return "academic"
+
+
+def validate_claim_record(
+    path: Path,
+    expected_cite_key: str,
+    expected_canonical_id: str,
+    claim_domain: str = "academic",
+) -> list[str]:
     errors: list[str] = []
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -167,13 +234,20 @@ def validate_claim_record(path: Path, expected_cite_key: str, expected_canonical
     if payload.get("content_status") == "metadata-only" and claims:
         errors.append(f"{path.name}: metadata-only sidecars must have empty claims")
 
+    allowed_types = CLAIM_TYPE_SUBSETS.get(claim_domain, CLAIM_TYPE_SUBSETS["academic"])
+
     for index, claim in enumerate(claims):
         prefix = f"{path.name}: claims[{index}]"
         if not isinstance(claim, dict):
             errors.append(f"{prefix} must be an object")
             continue
-        if claim.get("type") not in CLAIM_TYPES:
-            errors.append(f"{prefix} has invalid type")
+        claim_type = claim.get("type")
+        if claim_type not in CLAIM_TYPES:
+            errors.append(f"{prefix} has invalid type '{claim_type}'")
+        elif claim_type not in allowed_types:
+            errors.append(
+                f"{prefix} type '{claim_type}' is not allowed in claim_domain '{claim_domain}'"
+            )
         anchor = claim.get("source_anchor")
         if not isinstance(anchor, dict):
             errors.append(f"{prefix} missing source_anchor")
@@ -182,12 +256,31 @@ def validate_claim_record(path: Path, expected_cite_key: str, expected_canonical
             errors.append(f"{prefix} missing source_anchor.locator")
         if anchor.get("confidence") not in {"high", "medium", "low"}:
             errors.append(f"{prefix} has invalid source_anchor.confidence")
-        if claim.get("type") == "connection" and claim.get("linked_paper_status") not in {"in-corpus", "out-of-corpus"}:
+        if claim_type == "connection" and claim.get("linked_paper_status") not in {"in-corpus", "out-of-corpus"}:
             errors.append(f"{prefix} missing linked_paper_status")
+        # Required-field validation for new claim types.
+        for required_field in REQUIRED_FIELDS_BY_TYPE.get(claim_type or "", []):
+            if required_field not in claim:
+                errors.append(
+                    f"{prefix} type '{claim_type}' missing required field '{required_field}'"
+                )
+        if claim_type == "supply-chain-fact" and "verifiability" in claim:
+            if claim["verifiability"] not in VERIFIABILITY_VALUES:
+                errors.append(
+                    f"{prefix} 'verifiability' must be one of"
+                    f" {sorted(VERIFIABILITY_VALUES)}, got '{claim['verifiability']}'"
+                )
+        if claim_type == "projection" and "driver_assumptions" in claim:
+            if not isinstance(claim["driver_assumptions"], list):
+                errors.append(f"{prefix} 'driver_assumptions' must be a list")
     return errors
 
 
-def validate_note(path: Path, claims_path: Path | None) -> tuple[list[str], list[str]]:
+def validate_note(
+    path: Path,
+    claims_path: Path | None,
+    claim_domain: str = "academic",
+) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
     note_text = path.read_text(encoding="utf-8")
@@ -221,7 +314,9 @@ def validate_note(path: Path, claims_path: Path | None) -> tuple[list[str], list
         warnings.append(f"{path.name}: claims sidecar missing (allowed in v2 mode): {claims_path.name}")
         return errors, warnings
 
-    errors.extend(validate_claim_record(claims_path, cite_key or "", canonical_id or ""))
+    errors.extend(
+        validate_claim_record(claims_path, cite_key or "", canonical_id or "", claim_domain)
+    )
     return errors, warnings
 
 
@@ -441,7 +536,12 @@ def validate_vault_root(
             continue
 
         claims_path = (claims_dir / f"{note_path.stem}.json") if claims_enabled else None
-        note_errors, note_warnings = validate_note(note_path, claims_path)
+        if paper_bank is not None:
+            catalog_path = paper_bank / note_path.stem / "_catalog.yaml"
+            claim_domain = _read_claim_domain(catalog_path)
+        else:
+            claim_domain = "academic"
+        note_errors, note_warnings = validate_note(note_path, claims_path, claim_domain)
 
         # Stub propagation: if paper-bank is available and the paper is a stub,
         # downgrade note-level validation errors to warnings so the validator

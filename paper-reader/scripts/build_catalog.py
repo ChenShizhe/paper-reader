@@ -47,7 +47,7 @@ def _manifest_path(work_dir: Path) -> Path:
     return work_dir / _CANONICAL_MANIFEST_REL_PATH
 
 
-def _run_build_mode(cite_key: str, work_dir: str) -> None:
+def _run_build_mode(cite_key: str, work_dir: str, claim_domain: str = "academic") -> None:
     resolved_work = Path(work_dir).expanduser().resolve()
     manifest_path = _manifest_path(resolved_work)
     if not manifest_path.exists():
@@ -61,6 +61,8 @@ def _run_build_mode(cite_key: str, work_dir: str) -> None:
             cite_key,
             "--work-dir",
             resolved_work_dir,
+            "--claim-domain",
+            claim_domain,
         ]
         _catalog_main()
     finally:
@@ -76,6 +78,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source-dir",
         help="Legacy alias for --work-dir (build mode compatibility).",
+    )
+    parser.add_argument(
+        "--claim-domain",
+        default="academic",
+        choices=["academic", "institutional", "sell_side", "hybrid"],
+        help="Claim domain written to catalog frontmatter (default: academic).",
     )
     subparsers = parser.add_subparsers(dest="command")
     snapshot_parser = subparsers.add_parser(
@@ -108,7 +116,7 @@ def main() -> None:
         parser.error(
             "build mode requires --cite-key and one of --work-dir/--source-dir."
         )
-    _run_build_mode(cite_key, work_dir)
+    _run_build_mode(cite_key, work_dir, claim_domain=args.claim_domain)
 
 
 if __name__ == "__main__":

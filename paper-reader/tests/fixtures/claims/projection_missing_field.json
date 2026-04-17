@@ -1,0 +1,19 @@
+{
+  "schema_version": "2",
+  "cite_key": "projmissing2024",
+  "canonical_id": "manual:projmissing2024",
+  "content_status": "full",
+  "extraction_confidence": "medium",
+  "claims": [
+    {
+      "type": "projection",
+      "horizon_year": 2030,
+      "base_value": "100 GW",
+      "driver_assumptions": ["demand growth"],
+      "source_anchor": {
+        "locator": "p. 5",
+        "confidence": "medium"
+      }
+    }
+  ]
+}

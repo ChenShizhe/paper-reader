@@ -1,0 +1,18 @@
+{
+  "schema_version": "2",
+  "cite_key": "scftest2024",
+  "canonical_id": "manual:scftest2024",
+  "content_status": "full",
+  "extraction_confidence": "medium",
+  "claims": [
+    {
+      "type": "supply-chain-fact",
+      "attestation_source": "IEA 2023",
+      "verifiability": "independent",
+      "source_anchor": {
+        "locator": "Table 3",
+        "confidence": "high"
+      }
+    }
+  ]
+}

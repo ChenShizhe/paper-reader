@@ -1,0 +1,20 @@
+{
+  "schema_version": "2",
+  "cite_key": "cthesis2024",
+  "canonical_id": "manual:cthesis2024",
+  "content_status": "full",
+  "extraction_confidence": "medium",
+  "claims": [
+    {
+      "type": "company-thesis",
+      "ticker": "AAPL",
+      "thesis_note": "Strong moat in services",
+      "tier": "1",
+      "geography": "US",
+      "source_anchor": {
+        "locator": "p. 3",
+        "confidence": "high"
+      }
+    }
+  ]
+}

@@ -292,7 +292,26 @@ def parse_args() -> argparse.Namespace:
             "from the run-report directory (default: checkpoint.json)."
         ),
     )
-    return p.parse_args()
+    p.add_argument(
+        "--mode",
+        default="paper",
+        choices=["paper", "book", "chain_map"],
+        help="Pipeline mode: paper (default), book, or chain_map.",
+    )
+    p.add_argument(
+        "--chapter-plan",
+        default="",
+        help="Path to chapter plan file. Required when --mode=book.",
+    )
+    p.add_argument(
+        "--watchlist",
+        default="",
+        help="Path to watchlist file (optional).",
+    )
+    args = p.parse_args()
+    if args.mode == "book" and not args.chapter_plan:
+        p.error("--chapter-plan is required when --mode=book")
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -710,8 +729,18 @@ def main() -> int:
     cite_key: str = args.cite_key
     source_format: str = args.source_format
     source_path: str = args.source_path
+    mode: str = args.mode
+    chapter_plan: str = args.chapter_plan
+    watchlist: str = args.watchlist
     paper_bank: Path = _resolve_paper_bank(cite_key, args.paper_bank_dir)
     vault_root: Path = _resolve_vault(args.vault_root)
+
+    _MODE_CLAIM_DOMAIN = {
+        "paper": "academic",
+        "book": "institutional",
+        "chain_map": "sell_side",
+    }
+    claim_domain = _MODE_CLAIM_DOMAIN[mode]
     segment_source_dir: Path = _resolve_segment_source_dir(source_path)
     run_report_path: Path = Path(args.run_report_path)
     checkpoint_path: Path = Path(args.checkpoint_path)
@@ -775,7 +804,12 @@ def main() -> int:
         "--skill-root", str(skill_root),
         "--constitution-path", str(skill_root / "reading-constitution.md"),
         "--vault-root", str(vault_root),
+        "--mode", mode,
     ]
+    if chapter_plan:
+        comprehend_cmd += ["--chapter-plan", chapter_plan]
+    if watchlist:
+        comprehend_cmd += ["--watchlist", watchlist]
     vault_requests_path = paper_bank / "_vault-write-requests.json"
     vault_cmd = [
         py,
@@ -790,7 +824,12 @@ def main() -> int:
         str(scripts / "validate_extraction.py"),
         "--vault-root", str(vault_root),
         "--paper-bank", str(paper_bank.parent),
+        "--mode", mode,
     ]
+    if chapter_plan:
+        validate_cmd += ["--chapter-plan", chapter_plan]
+    if watchlist:
+        validate_cmd += ["--watchlist", watchlist]
     vault_search_results_path = paper_bank / "_vault_search_results.json"
     vault_search_cmd = [
         py,
@@ -929,7 +968,8 @@ def main() -> int:
             "catalog",
             [py, str(scripts / "build_catalog.py"),
              "--cite-key", cite_key,
-             "--work-dir", str(paper_bank)],
+             "--work-dir", str(paper_bank),
+             "--claim-domain", claim_domain],
             False,  # hard: _catalog.yaml must exist before comprehend
         ),
         (

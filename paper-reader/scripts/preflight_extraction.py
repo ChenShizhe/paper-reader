@@ -127,6 +127,21 @@ def resolve_vault_root() -> Path:
 # ---------------------------------------------------------------------------
 
 
+def check_pymupdf() -> dict[str, object]:
+    """Check PyMuPDF (fitz) importability for PDF reading and metadata extraction."""
+    spec = importlib.util.find_spec("fitz")
+    found = spec is not None
+    result: dict[str, object] = {
+        "tool": "pymupdf",
+        "status": "found" if found else "missing",
+        "required": False,
+        "fallback": "install PyMuPDF (pip install pymupdf) to enable PDF reading and page-level extraction",
+    }
+    if found and spec.origin:
+        result["path"] = spec.origin
+    return result
+
+
 def check_mineru() -> dict[str, object]:
     """Check MinerU availability via magic-pdf CLI or mineru Python package.
 
@@ -256,6 +271,7 @@ def build_report() -> dict[str, object]:
     # v2 checks: MinerU, Citadel vault accessibility, paper-bank root
     # ------------------------------------------------------------------
     v2_checks: list[dict[str, object]] = [
+        check_pymupdf(),
         check_mineru(),
         check_citadel_vault(vault_root),
         check_path(

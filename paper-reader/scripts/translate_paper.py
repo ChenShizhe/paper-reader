@@ -38,6 +38,20 @@ from translation_utils import _score_root_tex, compute_common_root_name
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
+# Born-digital producer/creator substrings used by the probe (canonical list in pdf_probe.py):
+# pdftex, latex, xetex, luatex, microsoft, word, adobe acrobat, acrobat distiller,
+# chrome, chromium, webkit, weasyprint, wkhtmltopdf, skia/pdf
+def probe_pdf_type(pdf_path: "str | Path") -> dict:
+    """Probe *pdf_path* to decide between PyMuPDF and MinerU.
+
+    Delegates to pdf_probe.probe_pdf_type (extracted there because the body
+    + constants exceed ~50 lines).  Returns {translator, reason, probe_metadata}.
+    """
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from pdf_probe import probe_pdf_type as _impl  # type: ignore
+    return _impl(pdf_path)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Translate a LaTeX paper into markdown (translated_full.md).")
     parser.add_argument("--cite-key", required=True, help="Cite key used for the paper-bank folder")
@@ -74,6 +88,22 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Pages per chunk for the PDF pipeline (default: 3).",
+    )
+    parser.add_argument(
+        "--force-mineru",
+        action="store_true",
+        help=(
+            "Force MinerU translator for --format pdf, ignoring the born-digital probe. "
+            "Precedence: --force-mineru > --force-pymupdf > probe > default (MinerU)."
+        ),
+    )
+    parser.add_argument(
+        "--force-pymupdf",
+        action="store_true",
+        help=(
+            "Force PyMuPDF translator for --format pdf, ignoring the born-digital probe. "
+            "Precedence: --force-mineru > --force-pymupdf > probe > default (MinerU)."
+        ),
     )
     return parser.parse_args()
 
@@ -1089,6 +1119,139 @@ def _translate_html_format(
     return output_path
 
 
+def _translate_pdf_pymupdf(
+    *,
+    cite_key: str,
+    output_path: Path,
+    pdf_path: Path,
+) -> Path:
+    """Extract full text via PyMuPDF and write translated_full.md."""
+    import fitz  # type: ignore
+
+    doc = fitz.open(str(pdf_path))
+    try:
+        page_texts: list[str] = [doc[i].get_text("text") for i in range(doc.page_count)]
+        page_count = doc.page_count
+    finally:
+        doc.close()
+
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    frontmatter_lines = [
+        "---",
+        f"cite_key: {cite_key}",
+        "source_format: pdf",
+        "translation_tool: pymupdf",
+        f"translation_timestamp: {timestamp}",
+        f"page_count: {page_count}",
+        "---",
+        "",
+    ]
+    body_parts: list[str] = []
+    for i, text in enumerate(page_texts, start=1):
+        stripped = text.strip()
+        if stripped:
+            body_parts.append(f"<!-- page {i} -->\n\n{stripped}")
+    full_md = "\n".join(frontmatter_lines) + "\n\n".join(body_parts) + "\n"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(full_md, encoding="utf-8")
+    return output_path
+
+
+def _dispatch_pdf_translation(
+    *,
+    cite_key: str,
+    paper_bank_dir: Path,
+    output_path: Path,
+    pdf_pages_per_group: int,
+    force_mineru: bool = False,
+    force_pymupdf: bool = False,
+) -> Path:
+    """Run the born-digital probe and route to PyMuPDF or MinerU.
+
+    Precedence: force_mineru > force_pymupdf > probe > default (MinerU).
+    Writes probe fields into _translation_manifest.json after dispatch.
+    """
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+    pdf_path = _find_pdf_in_paper_bank(paper_bank_dir)
+
+    try:
+        from pdf_probe import probe_pdf_type  # type: ignore
+        probe_result = probe_pdf_type(pdf_path)
+    except Exception as exc:
+        print(f"[probe] probe failed: {exc}; defaulting to MinerU", file=sys.stderr)
+        probe_result = {
+            "translator": "mineru",
+            "reason": "scan_detected",
+            "probe_metadata": {
+                "producer": "",
+                "creator": "",
+                "sampled_pages": [],
+                "text_layer_usable": False,
+            },
+        }
+
+    if force_mineru:
+        use_translator = "mineru"
+        manifest_reason = "user_override"
+    elif force_pymupdf:
+        use_translator = "pymupdf"
+        manifest_reason = "user_override"
+    else:
+        use_translator = probe_result["translator"]
+        manifest_reason = probe_result["reason"]
+
+    probe_metadata: dict = probe_result["probe_metadata"]
+    trade_offs: list[str] = []
+    translator_used = use_translator
+
+    if use_translator == "pymupdf":
+        try:
+            output_path = _translate_pdf_pymupdf(
+                cite_key=cite_key,
+                output_path=output_path,
+                pdf_path=pdf_path,
+            )
+            trade_offs = ["figures_not_extracted", "complex_multicolumn_tables_may_merge"]
+        except Exception as exc:
+            print(
+                f"[probe] PyMuPDF extraction failed: {exc}; falling back to MinerU",
+                file=sys.stderr,
+            )
+            manifest_reason = "probe_selected_pymupdf_extraction_failed"
+            use_translator = "mineru"
+            translator_used = "mineru"
+
+    if use_translator == "mineru":
+        output_path = _translate_pdf_format(
+            cite_key=cite_key,
+            paper_bank_dir=paper_bank_dir,
+            output_path=output_path,
+            pdf_pages_per_group=pdf_pages_per_group,
+        )
+
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    manifest_path = paper_bank_dir / "_translation_manifest.json"
+    existing: dict = {}
+    if manifest_path.exists():
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    existing.update({
+        "cite_key": existing.get("cite_key", cite_key),
+        "timestamp": existing.get("timestamp", timestamp),
+        "translator_used": translator_used,
+        "reason": manifest_reason,
+        "probe_metadata": probe_metadata,
+        "trade_offs_disclosed": trade_offs,
+    })
+    manifest_path.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"[translate_paper] probe manifest written: {manifest_path}", file=sys.stderr)
+
+    return output_path
+
+
 def _translate_pdf_format(
     *,
     cite_key: str,
@@ -1179,6 +1342,8 @@ def translate_paper(
     keep_temp: bool,
     dry_run: bool = False,
     pdf_pages_per_group: int = 3,
+    force_mineru: bool = False,
+    force_pymupdf: bool = False,
 ) -> Path:
     paper_bank_dir = paper_bank_dir.expanduser()
     paper_bank_dir.mkdir(parents=True, exist_ok=True)
@@ -1237,11 +1402,13 @@ def translate_paper(
         if dry_run and output_path.exists():
             print(f"[translate_paper] dry-run: {output_path} already exists, skipping.", file=sys.stderr)
             return output_path
-        return _translate_pdf_format(
+        return _dispatch_pdf_translation(
             cite_key=resolved_cite_key,
             paper_bank_dir=paper_bank_dir,
             output_path=output_path,
             pdf_pages_per_group=max(1, int(pdf_pages_per_group)),
+            force_mineru=force_mineru,
+            force_pymupdf=force_pymupdf,
         )
     if fmt == "html":
         return _translate_html_format(
@@ -1394,6 +1561,8 @@ def main() -> int:
         keep_temp=bool(args.keep_temp),
         dry_run=bool(args.dry_run),
         pdf_pages_per_group=max(1, int(args.pdf_pages_per_group)),
+        force_mineru=bool(args.force_mineru),
+        force_pymupdf=bool(args.force_pymupdf),
     )
     # Write a secondary copy at translated_full_pdf.md for backward compatibility
     # with pdf_segmenter.py, which still reads that specific filename.
