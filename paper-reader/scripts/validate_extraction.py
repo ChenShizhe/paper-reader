@@ -69,6 +69,10 @@ CLAIM_TYPE_SUBSETS: dict[str, set[str]] = {
         "company-thesis", "supply-chain-fact", "projection",
         "policy-recommendation", "connection", "limitation",
     },
+    "filing": {
+        "methodology", "empirical", "projection", "limitation",
+        "data-availability", "company-thesis", "supply-chain-fact",
+    },
 }
 CLAIM_TYPE_SUBSETS["hybrid"] = set().union(*CLAIM_TYPE_SUBSETS.values())
 
@@ -126,7 +130,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         default="paper",
-        choices=["paper", "book", "chain_map"],
+        choices=["paper", "book", "chain_map", "simple", "10k"],
         help="Pipeline mode forwarded from run_pipeline (default: paper).",
     )
     parser.add_argument(

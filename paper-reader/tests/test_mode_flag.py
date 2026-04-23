@@ -64,8 +64,8 @@ class ModeFlagTest(unittest.TestCase):
         combined = result.stdout + result.stderr
         self.assertIn("chapter plan", combined.lower())
 
-    def test_mode_chain_map_raises_notimplemented(self):
-        """--mode=chain_map raises NotImplementedError with m4 pointer."""
+    def test_mode_chain_map_requires_translated_full(self):
+        """--mode=chain_map exits cleanly when translated_full.md is missing."""
         result = subprocess.run(
             [
                 sys.executable,
@@ -78,8 +78,7 @@ class ModeFlagTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         combined = result.stdout + result.stderr
-        self.assertIn("NotImplementedError", combined)
-        self.assertIn("m4", combined)
+        self.assertIn("translated_full.md", combined)
 
 
 if __name__ == "__main__":

@@ -63,10 +63,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--format",
         default="auto",
-        choices=("auto", "pandoc", "pdf", "html"),
+        choices=("auto", "pandoc", "pdf", "html", "markdown"),
         help="Translation backend. 'pdf' forces the PDF extraction pipeline; "
              "'html' converts a local HTML file via the HTML translator; "
+             "'markdown' copies a source markdown file through as translated_full.md; "
              "'auto' and 'pandoc' use the LaTeX/pandoc path.",
+    )
+    parser.add_argument(
+        "--source-file",
+        default="",
+        help=(
+            "Explicit source file path (markdown/html). "
+            "When omitted the translator scans <paper-bank-dir>/raw and <paper-bank-dir>/source."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -1101,6 +1110,84 @@ def _find_html_in_paper_bank(paper_bank_dir: Path) -> Path:
     raise FileNotFoundError(f"No HTML file found under {paper_bank_dir}")
 
 
+def _find_markdown_in_paper_bank(paper_bank_dir: Path) -> Path:
+    """Return the main markdown file found under paper_bank_dir (raw/ > source/ > root)."""
+    for subdir_name in ("raw", "source", ""):
+        search_dir = paper_bank_dir / subdir_name if subdir_name else paper_bank_dir
+        if not search_dir.is_dir():
+            continue
+        # Exclude translated_full.md itself when scanning the root directory.
+        candidates = [
+            p for p in sorted(search_dir.glob("*.md")) + sorted(search_dir.glob("*.markdown"))
+            if p.name != "translated_full.md"
+        ]
+        if candidates:
+            return min(candidates, key=lambda p: len(p.name))
+    raise FileNotFoundError(f"No markdown file found under {paper_bank_dir}")
+
+
+def _translate_markdown_passthrough(
+    *,
+    cite_key: str,
+    paper_bank_dir: Path,
+    output_path: Path,
+    source_file: str = "",
+) -> Path:
+    """Copy a source markdown file to translated_full.md without transformation.
+
+    Used by simple mode (proposal 06) for born-markdown sources like regulatory
+    bulletins and short sell-side notes. No pandoc, no segmentation-specific
+    reshaping — just a durable passthrough with a minimal translation manifest.
+    """
+    if source_file:
+        md_path = Path(source_file).expanduser()
+        if not md_path.exists():
+            raise FileNotFoundError(f"--source-file not found: {md_path}")
+    else:
+        md_path = _find_markdown_in_paper_bank(paper_bank_dir)
+
+    body = md_path.read_text(encoding="utf-8", errors="replace")
+    word_count = len(re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?", body))
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    if not body.startswith("---"):
+        frontmatter_lines = [
+            "---",
+            f"cite_key: {cite_key}",
+            "source_format: markdown",
+            "translation_tool: passthrough",
+            f"translation_timestamp: {timestamp}",
+            "---",
+            "",
+        ]
+        full_md = "\n".join(frontmatter_lines) + body
+    else:
+        full_md = body
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(full_md, encoding="utf-8")
+
+    manifest_path = paper_bank_dir / "_translation_manifest.json"
+    manifest = {
+        "cite_key": cite_key,
+        "source_file": str(md_path),
+        "source_format": "markdown",
+        "tool": "passthrough",
+        "timestamp": timestamp,
+        "word_count": word_count,
+        "validation_status": "passed",
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        f"[translate_paper] markdown passthrough: {md_path} -> {output_path}",
+        file=sys.stderr,
+    )
+    return output_path
+
+
 def _translate_html_format(
     *,
     cite_key: str,
@@ -1344,6 +1431,7 @@ def translate_paper(
     pdf_pages_per_group: int = 3,
     force_mineru: bool = False,
     force_pymupdf: bool = False,
+    source_file: str = "",
 ) -> Path:
     paper_bank_dir = paper_bank_dir.expanduser()
     paper_bank_dir.mkdir(parents=True, exist_ok=True)
@@ -1415,6 +1503,13 @@ def translate_paper(
             cite_key=resolved_cite_key,
             paper_bank_dir=paper_bank_dir,
             output_path=output_path,
+        )
+    if fmt == "markdown":
+        return _translate_markdown_passthrough(
+            cite_key=resolved_cite_key,
+            paper_bank_dir=paper_bank_dir,
+            output_path=output_path,
+            source_file=source_file,
         )
     if fmt != "pandoc":
         raise ValueError(f"Unsupported --format: {fmt}")
@@ -1563,6 +1658,7 @@ def main() -> int:
         pdf_pages_per_group=max(1, int(args.pdf_pages_per_group)),
         force_mineru=bool(args.force_mineru),
         force_pymupdf=bool(args.force_pymupdf),
+        source_file=args.source_file,
     )
     # Write a secondary copy at translated_full_pdf.md for backward compatibility
     # with pdf_segmenter.py, which still reads that specific filename.

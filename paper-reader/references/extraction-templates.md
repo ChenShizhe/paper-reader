@@ -409,3 +409,31 @@ or third-party data source and does not depend on a specific stock view, use
 `supply-chain-fact` with `attestation_source` filled in. If the claim is a forward
 view that would change if the company were acquired or de-listed, use
 `company-thesis`.
+
+---
+
+## Mode → claim-domain mapping
+
+The `claim_domain` field in `_catalog.yaml` is derived automatically from the
+pipeline mode. It controls which claim types `validate_extraction.py` will
+accept in the sidecar.
+
+| Mode | `claim_domain` | Permitted claim types |
+|---|---|---|
+| `paper` | `academic` | `theorem`, `assumption`, `methodology`, `empirical`, `connection`, `limitation`, `data-availability`, `code-availability` |
+| `book` | `institutional` | `policy-recommendation`, `projection`, `supply-chain-fact`, `empirical`, `connection`, `limitation` |
+| `chain_map` | `sell_side` | `company-thesis`, `supply-chain-fact`, `projection`, `policy-recommendation`, `connection`, `limitation` |
+| `simple` | `hybrid` | MVP does not emit a claims sidecar; if enabled later, the union set applies |
+| `10k` | `filing` | `methodology`, `empirical`, `projection`, `limitation`, `data-availability`, `company-thesis`, `supply-chain-fact` |
+
+For 10-K mode, the rejected types are `theorem`, `assumption`, `proofs`, and
+`policy-recommendation` — `policy-recommendation` is reserved for book-mode
+institutional content (policy briefs, outlook reports), not primary filings.
+
+## Simple mode: no sidecar in the MVP
+
+Simple mode's single-file output does not carry a claims sidecar in the MVP.
+Claims appear inline in the `## Key Claims` section with `[anchor: ...]`
+traceability tags, which is sufficient for short-form content (≤ 15 KB).
+Downstream consumers that need structured claim queries across simple-mode
+outputs can opt in to an optional sidecar when the MVP is extended.

@@ -1628,6 +1628,274 @@ def synthesize_chain_map(
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# 10-K mode synthesis (proposal 07)
+# ───────────────────────────────────────────────────────────────────────────
+
+# 14-section summary body in canonical order.
+_10K_SECTIONS: list[str] = [
+    "Company Snapshot",
+    "Business and Segments",
+    "Priority Risk Factors",
+    "MD&A Synthesis",
+    "Segment Performance",
+    "Financial Position",
+    "Cash Flow Quality",
+    "Notes Highlights",
+    "Controls and Governance",
+    "Non-GAAP and KPI Reconciliation",
+    "Evolving-Topic Coverage",
+    "Textual-Analysis Flags",
+    "Forward-Looking Statements",
+    "Open Questions",
+]
+
+_FILING_CLAIM_TYPES: set[str] = {
+    "methodology",
+    "empirical",
+    "projection",
+    "limitation",
+    "data-availability",
+    "company-thesis",
+    "supply-chain-fact",
+}
+
+
+def _load_subagent_output(paper_bank_dir: Path, subagent_key: str) -> dict:
+    path = paper_bank_dir / f"_10k_{subagent_key}.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _load_filing_metadata(path: Path | None) -> dict:
+    if path is None or not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _merge_10k_sections(
+    positioning: dict, financial: dict, risk_forward: dict
+) -> dict[str, str]:
+    """Build the {section_name -> prose} map from the 3 subagent JSONs."""
+    merged: dict[str, str] = {name: "" for name in _10K_SECTIONS}
+    for payload in (positioning, financial, risk_forward):
+        sections = payload.get("sections") or {}
+        if not isinstance(sections, dict):
+            continue
+        for name, prose in sections.items():
+            if name in merged and isinstance(prose, str) and prose.strip():
+                merged[name] = prose.strip()
+    return merged
+
+
+def _validate_10k_claims(claims: list[dict]) -> list[dict]:
+    cleaned: list[dict] = []
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        claim_type = claim.get("type")
+        if claim_type not in _FILING_CLAIM_TYPES:
+            continue
+        cleaned.append(claim)
+    return cleaned
+
+
+def _build_10k_frontmatter(
+    *,
+    cite_key: str,
+    ticker: str,
+    manifest: dict,
+    filing_metadata: dict,
+) -> str:
+    items_present = [
+        entry.get("item") for entry in manifest.get("segments", [])
+        if entry.get("present") == "true"
+    ]
+    items_ibr = [
+        entry.get("item") for entry in manifest.get("segments", [])
+        if entry.get("present") == "incorporated_by_reference"
+    ]
+    word_count = sum(
+        int(entry.get("word_count") or 0) for entry in manifest.get("segments", [])
+    )
+    fields = [
+        "---",
+        f"cite_key: {cite_key}",
+        f"ticker: {ticker or filing_metadata.get('ticker', '')}",
+        f"company_name: {filing_metadata.get('company_name', '')}",
+        "filing_type: 10-K",
+        f"fiscal_year: {filing_metadata.get('fiscal_year', '')}",
+        f"period_end: {filing_metadata.get('period_end', '')}",
+        f"filed: {filing_metadata.get('filed', '')}",
+        f"cik: {filing_metadata.get('cik', '')}",
+        f"accession_number: {filing_metadata.get('accession_number', '')}",
+        f"source_format: {filing_metadata.get('source_format', 'pdf')}",
+        "mode: 10k",
+        f"word_count: {word_count}",
+        f"items_present: {json.dumps(items_present)}",
+        f"items_incorporated_by_reference: {json.dumps(items_ibr)}",
+        f"amendment: {filing_metadata.get('amendment', '10-K')}",
+        "---",
+        "",
+    ]
+    return "\n".join(fields)
+
+
+def _render_10k_body(sections: dict[str, str]) -> str:
+    lines: list[str] = []
+    for name in _10K_SECTIONS:
+        lines.append(f"## {name}")
+        lines.append("")
+        body = sections.get(name, "").strip()
+        lines.append(body if body else "*Section not populated — subagent output unavailable.*")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _write_per_item_notes(
+    cite_key: str,
+    manifest: dict,
+    paper_bank_dir: Path,
+    vault_papers_dir: Path,
+) -> list[Path]:
+    """Mirror per-Item segments into the vault as item-<N>.md notes."""
+    out_dir = vault_papers_dir / cite_key
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for entry in manifest.get("segments", []):
+        number = entry.get("item", "")
+        present = entry.get("present", "false")
+        target = out_dir / f"item-{number}.md"
+        if present == "true":
+            rel = entry.get("file", "")
+            src = paper_bank_dir / rel if rel else paper_bank_dir / "segments" / f"item-{number}.md"
+            if src.exists():
+                target.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                written.append(target)
+                continue
+        # Stub notes for absent or incorporated-by-reference Items so downstream
+        # validators see a complete per-Item note set.
+        title = entry.get("item_title", "")
+        pointer = entry.get("incorporation_pointer", "")
+        stub_body = (
+            "---\n"
+            f"cite_key: {cite_key}\n"
+            f"item: {number}\n"
+            f"item_title: {title}\n"
+            f"present: {present}\n"
+            "---\n\n"
+            + (
+                f"*Incorporated by reference from: {pointer}*\n"
+                if present == "incorporated_by_reference" and pointer
+                else "*Item absent from the filing as submitted.*\n"
+            )
+        )
+        target.write_text(stub_body, encoding="utf-8")
+        written.append(target)
+    return written
+
+
+def synthesize_10k(
+    *,
+    cite_key: str,
+    ticker: str,
+    paper_bank_dir: Path,
+    vault_path: Path,
+    filing_metadata_path: Path | None = None,
+    output: Path | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """Assemble the 14-section 10-K summary from 3 subagent JSONs and the segment manifest."""
+    paper_bank = paper_bank_dir if paper_bank_dir.name == cite_key else paper_bank_dir / cite_key
+    manifest_path = paper_bank / "segments" / "_segment_manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"10-K segment manifest not found at {manifest_path}. Run segment_10k.py first."
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    positioning = _load_subagent_output(paper_bank, "positioning")
+    financial = _load_subagent_output(paper_bank, "financial")
+    risk_forward = _load_subagent_output(paper_bank, "risk_forward")
+    filing_metadata = _load_filing_metadata(filing_metadata_path)
+
+    sections = _merge_10k_sections(positioning, financial, risk_forward)
+    claims_combined = (
+        (positioning.get("claims") or [])
+        + (financial.get("claims") or [])
+        + (risk_forward.get("claims") or [])
+    )
+    claims_clean = _validate_10k_claims(claims_combined)
+
+    frontmatter = _build_10k_frontmatter(
+        cite_key=cite_key,
+        ticker=ticker,
+        manifest=manifest,
+        filing_metadata=filing_metadata,
+    )
+    body = _render_10k_body(sections)
+    summary_markdown = frontmatter + body
+
+    vault_papers_dir = vault_path / "literature" / "papers"
+    if not vault_papers_dir.exists():
+        vault_papers_dir = vault_path / "papers"
+    vault_papers_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output if output else vault_papers_dir / f"{cite_key}.md"
+
+    claims_dir = vault_path / "literature" / "claims"
+    if not claims_dir.exists():
+        claims_dir = vault_path / "claims"
+    claims_path = claims_dir / f"{cite_key}.json"
+
+    per_item_notes: list[Path] = []
+    result = {
+        "mode": "10k",
+        "cite_key": cite_key,
+        "ticker": ticker,
+        "summary_path": str(summary_path),
+        "claims_path": str(claims_path),
+        "section_count": len(_10K_SECTIONS),
+        "claim_count": len(claims_clean),
+        "sections_populated": sum(1 for s in sections.values() if s.strip()),
+    }
+
+    if dry_run:
+        return result
+
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(summary_markdown, encoding="utf-8")
+
+    claims_dir.mkdir(parents=True, exist_ok=True)
+    claims_payload = {
+        "schema_version": "v2",
+        "cite_key": cite_key,
+        "canonical_id": cite_key,
+        "content_status": "full",
+        "extraction_confidence": "medium",
+        "claims": claims_clean,
+    }
+    claims_path.write_text(
+        json.dumps(claims_payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    per_item_notes = _write_per_item_notes(
+        cite_key=cite_key,
+        manifest=manifest,
+        paper_bank_dir=paper_bank,
+        vault_papers_dir=vault_papers_dir,
+    )
+    result["per_item_notes_written"] = len(per_item_notes)
+    return result
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="summarize_paper.py",
@@ -1657,12 +1925,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["paper", "book", "chain_map"],
+        choices=["paper", "book", "chain_map", "10k"],
         default="paper",
         help=(
-            "Synthesis mode: 'paper' (default), 'book', or 'chain_map'. "
-            "chain_map produces an 8-section sell-side chain report from _chain_map.json."
+            "Synthesis mode: 'paper' (default), 'book', 'chain_map', or '10k'. "
+            "chain_map produces an 8-section sell-side chain report from _chain_map.json. "
+            "10k merges 3 subagent JSONs into the 14-section filing summary."
         ),
+    )
+    parser.add_argument(
+        "--ticker",
+        default="",
+        help="Ticker symbol (10k mode only; written into summary frontmatter).",
+    )
+    parser.add_argument(
+        "--filing-metadata",
+        default="",
+        help="Optional JSON file with filing metadata (10k mode).",
     )
     parser.add_argument(
         "--cite-key",
@@ -1731,6 +2010,20 @@ def main() -> None:
             cite_key=args.cite_key,
             paper_bank_dir=Path(args.paper_bank_dir).expanduser().resolve(),
             vault_path=vault_path,
+            output=output,
+            dry_run=args.dry_run,
+        )
+    elif args.mode == "10k":
+        if not args.paper_bank_dir:
+            parser.error("--paper-bank-dir is required for --mode 10k")
+        result = synthesize_10k(
+            cite_key=args.cite_key,
+            ticker=args.ticker,
+            paper_bank_dir=Path(args.paper_bank_dir).expanduser().resolve(),
+            vault_path=vault_path,
+            filing_metadata_path=(
+                Path(args.filing_metadata).expanduser().resolve() if args.filing_metadata else None
+            ),
             output=output,
             dry_run=args.dry_run,
         )

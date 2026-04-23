@@ -125,6 +125,8 @@ Select a mode before starting the pipeline. The default is `paper`.
 | `paper` | Default. Processes a single academic paper through the full 15-step pipeline. See [references/modes/paper.md](references/modes/paper.md). |
 | `book` | Processes a book or long-form document with chapter-level segmentation. See [references/modes/book.md](references/modes/book.md). |
 | `chain_map` | Builds a citation chain map across multiple related papers. See [references/modes/chain_map.md](references/modes/chain_map.md). |
+| `simple` | Short non-academic content (regulatory bulletins, rating actions, sell-side notes, primers). Single-subagent pipeline with a fixed 6-section schema. See [references/modes/simple.md](references/modes/simple.md). |
+| `10k` | Primary SEC Form 10-K filings. Item-boundary segmentation, 3-subagent comprehension, 14-section summary, per-Item notes, claims sidecar. See [references/modes/10k.md](references/modes/10k.md). |
 
 ### Book mode walkthrough
 
@@ -322,6 +324,86 @@ Notable edge cases:
 See [references/modes/chain_map.md](references/modes/chain_map.md) and
 [references/chain-map-schema.md](references/chain-map-schema.md) for the full
 field definitions, data_sections contract, and backwards-compatibility rules.
+
+### simple mode walkthrough
+
+Use `simple` mode for short non-academic content (~2–15 KB) that benefits
+from uniform structured extraction but does not warrant the full academic
+pipeline: regulatory investor-education bulletins, credit rating-action
+press releases, sell-side analyst snippets, industry-press deep-dives,
+practitioner methodology primers.
+
+Simple mode runs a minimal three-step pipeline — translate (passthrough or
+PyMuPDF / pandoc) → single-subagent comprehension → validator. No
+segmentation, catalog, claims sidecar, Zotero, or refs.bib.
+
+#### Invocation
+
+```bash
+python3 scripts/run_pipeline.py \
+  --mode simple \
+  --cite-key sec-bulletin-10k-reading \
+  --source-format markdown \
+  --source-path downloads/sec-bulletin.md \
+  --source-type regulatory-bulletin \
+  --paper-bank-dir "<PAPER_BANK>/sec-bulletin-10k-reading" \
+  --vault-root "<VAULT_ROOT>"
+```
+
+`--source-type` is required and drives the comprehension prompt's emphasis.
+Allowed values: `primer`, `rating-action`, `sell-side-note`,
+`earnings-commentary`, `industry-press`, `regulatory-bulletin`,
+`short-academic-note`, `other`.
+
+#### Output
+
+One file at `<vault>/papers/<cite_key>.md` with YAML frontmatter and six
+fixed sections (Overview, Key Claims, Methodology Guidance, Verbatim
+Quotes, Cross-References, Gaps and Limitations). See
+[references/modes/simple.md](references/modes/simple.md).
+
+### 10k mode walkthrough
+
+Use `10k` mode for primary SEC Form 10-K filings. Input is typically a
+born-digital PDF downloaded from EDGAR; HTML / inline-XBRL is also
+supported via `translate_10k_html.py`.
+
+10-K mode uses Item-boundary segmentation (not token-count), dispatches
+three parallel comprehension subagents (positioning, financial-lens,
+risk-controls-forward), and produces a 14-section summary plus per-Item
+notes and a claims sidecar.
+
+#### Invocation
+
+```bash
+python3 scripts/run_pipeline.py \
+  --mode 10k \
+  --cite-key NVDA_10k_FY2024 \
+  --ticker NVDA \
+  --source-format pdf \
+  --source-path downloads/NVDA-10K-FY2024.pdf \
+  --filing-metadata metadata/NVDA_10k_FY2024.json \
+  --paper-bank-dir "<PAPER_BANK>/NVDA_10k_FY2024" \
+  --vault-root "<VAULT_ROOT>"
+```
+
+`--ticker` is required so downstream consumers (e.g.,
+knowledge-maester's `ingest_ticker.py --mode append-thesis`) can key
+vault writes. `--filing-metadata` is optional; when supplied, its fields
+are written through to the summary frontmatter verbatim.
+
+#### Output
+
+- Summary note: `<vault>/papers/<cite_key>.md` (14 fixed sections).
+- Per-Item notes: `<vault>/papers/<cite_key>/item-<N>.md` (one per
+  canonical Item; absent / incorporated-by-reference Items get stubs).
+- Claims sidecar: `<vault>/claims/<cite_key>.json` (permitted types:
+  `methodology`, `empirical`, `projection`, `limitation`,
+  `data-availability`, `company-thesis`, `supply-chain-fact`).
+- iXBRL numeric facts (HTML sources only): `<paper-bank>/_xbrl_tags.json`.
+
+See [references/modes/10k.md](references/modes/10k.md) for the full
+specification and MVP limitations.
 
 ---
 

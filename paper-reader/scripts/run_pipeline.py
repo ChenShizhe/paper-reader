@@ -295,8 +295,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--mode",
         default="paper",
-        choices=["paper", "book", "chain_map"],
-        help="Pipeline mode: paper (default), book, or chain_map.",
+        choices=["paper", "book", "chain_map", "simple", "10k"],
+        help="Pipeline mode: paper (default), book, chain_map, simple, or 10k.",
     )
     p.add_argument(
         "--chapter-plan",
@@ -308,9 +308,39 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Path to watchlist file (optional).",
     )
+    p.add_argument(
+        "--source-type",
+        default="",
+        choices=[
+            "",
+            "primer", "rating-action", "sell-side-note", "earnings-commentary",
+            "industry-press", "regulatory-bulletin", "short-academic-note", "other",
+        ],
+        help=(
+            "Source type for simple mode (drives comprehension emphasis). "
+            "Required when --mode=simple."
+        ),
+    )
+    p.add_argument(
+        "--ticker",
+        default="",
+        help="Ticker symbol. Required when --mode=10k.",
+    )
+    p.add_argument(
+        "--filing-metadata",
+        default="",
+        help=(
+            "Optional JSON file with CIK, accession number, filing date, period of report, "
+            "ticker, company name. Used by --mode=10k."
+        ),
+    )
     args = p.parse_args()
     if args.mode == "book" and not args.chapter_plan:
         p.error("--chapter-plan is required when --mode=book")
+    if args.mode == "simple" and not args.source_type:
+        p.error("--source-type is required when --mode=simple")
+    if args.mode == "10k" and not args.ticker:
+        p.error("--ticker is required when --mode=10k")
     return args
 
 
@@ -330,8 +360,22 @@ def _resolve_vault(override: str) -> Path:
     return Path("~/Documents/Citadel").expanduser()
 
 
-def _resolve_segment_source_dir(source_path: str) -> Path:
-    """Return a directory path suitable for segment_paper.py --source-dir."""
+def _resolve_segment_source_dir(
+    source_path: str,
+    *,
+    source_format: str = "",
+    paper_bank: Path | None = None,
+) -> Path:
+    """Return a directory path suitable for segment_paper.py --source-dir.
+
+    For non-PDF formats, the translate step writes translated_full.md into
+    paper_bank, so the segmenter must read from paper_bank — not from
+    source_path.parent, which can sit outside the paper-bank (proposal 06
+    friction #2). Fall back to the legacy behavior when paper_bank is not
+    supplied or the format is PDF.
+    """
+    if paper_bank is not None and source_format not in ("pdf", ""):
+        return paper_bank
     resolved = Path(source_path).expanduser()
     return resolved if resolved.is_dir() else resolved.parent
 
@@ -720,6 +764,291 @@ def _append_supplementary_vault_section(
 
 
 # ---------------------------------------------------------------------------
+# Simple mode (proposal 06)
+# ---------------------------------------------------------------------------
+
+def _stage_simple_source(source_path: str, paper_bank: Path) -> Path:
+    """Copy source into paper_bank/raw/ so translate can find it consistently.
+
+    Simple mode sources (markdown / html / pdf) typically sit outside the
+    paper-bank; staging them into paper_bank/raw/ lets translate_paper.py's
+    existing file-finding logic work without extra plumbing.
+    """
+    src = Path(source_path).expanduser()
+    if not src.exists():
+        raise FileNotFoundError(f"--source-path not found: {src}")
+    raw_dir = paper_bank / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    dest = raw_dir / src.name
+    if not dest.exists() or dest.stat().st_size != src.stat().st_size:
+        shutil.copy2(str(src), str(dest))
+    return dest
+
+
+def _run_simple_pipeline(
+    args: argparse.Namespace,
+    *,
+    cite_key: str,
+    source_format: str,
+    source_path: str,
+    source_type: str,
+    paper_bank: Path,
+    vault_root: Path,
+    run_report_path: Path,
+) -> int:
+    """Execute the minimal simple-mode pipeline (proposal 06).
+
+    Steps: translate (passthrough / PyMuPDF / html) -> comprehend (single
+    subagent, 6-section schema) -> validate_simple_mode. No segmentation,
+    catalog, claim sidecar, Zotero, refs.bib, or vault_integration machinery.
+    """
+    py = sys.executable
+    scripts = SCRIPTS_DIR
+    paper_bank.mkdir(parents=True, exist_ok=True)
+
+    if source_format not in ("markdown", "html", "pdf", "text"):
+        print(
+            f"[run_pipeline] ERROR: simple mode requires --source-format in "
+            "{markdown, html, pdf, text} (got "
+            f"{source_format!r})",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Stage source into paper_bank/raw/ (idempotent).
+    try:
+        staged = _stage_simple_source(source_path, paper_bank)
+    except FileNotFoundError as exc:
+        print(f"[run_pipeline] ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    translate_format = source_format
+    if source_format == "text":
+        # Wrap the text source as markdown and route through passthrough.
+        wrapped = paper_bank / "raw" / f"{staged.stem}.md"
+        wrapped.write_text(
+            f"# {cite_key}\n\n```\n{staged.read_text(encoding='utf-8', errors='replace')}\n```\n",
+            encoding="utf-8",
+        )
+        translate_format = "markdown"
+
+    translate_cmd = [
+        py,
+        str(scripts / "translate_paper.py"),
+        "--cite-key", cite_key,
+        "--paper-bank-dir", str(paper_bank),
+        "--format", translate_format,
+    ]
+    if translate_format == "pdf":
+        translate_cmd.append("--force-pymupdf")
+
+    comprehend_cmd = [
+        py,
+        str(scripts / "comprehend_paper.py"),
+        "--cite-key", cite_key,
+        "--paper-bank-root", str(paper_bank.parent),
+        "--skill-root", str(scripts.parent),
+        "--vault-root", str(vault_root),
+        "--mode", "simple",
+        "--source-type", source_type,
+    ]
+    validate_cmd = [
+        py,
+        str(scripts / "validate_simple_mode.py"),
+        "--cite-key", cite_key,
+        "--vault-root", str(vault_root),
+    ]
+
+    steps: list[tuple[str, list[str], bool]] = [
+        ("translate", translate_cmd, False),  # hard
+        ("comprehend", comprehend_cmd, True),  # soft: may need live vault context
+        ("validate", validate_cmd, True),      # soft: audit-only
+    ]
+
+    results: list[dict] = []
+    pipeline_ok = True
+    for name, cmd, soft in steps:
+        print(f"[run_pipeline] -> {name} ...", file=sys.stderr)
+        result = _run_step(name, cmd, soft=soft)
+        results.append(result)
+        if result["status"] == "failed":
+            pipeline_ok = False
+            break
+
+    report = {
+        "schema_version": "v2",
+        "mode": "simple",
+        "cite_key": cite_key,
+        "source_format": source_format,
+        "source_type": source_type,
+        "source_path": source_path,
+        "paper_bank_dir": str(paper_bank),
+        "vault_root": str(vault_root),
+        "pipeline_status": "passed" if pipeline_ok else "failed",
+        "generated_at": _ts(),
+        "steps": results,
+    }
+    run_report_path.parent.mkdir(parents=True, exist_ok=True)
+    run_report_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(f"[run_pipeline] Run report written to {run_report_path}", file=sys.stderr)
+
+    return 0 if pipeline_ok else 1
+
+
+# ---------------------------------------------------------------------------
+# 10-K mode (proposal 07)
+# ---------------------------------------------------------------------------
+
+def _run_10k_pipeline(
+    args: argparse.Namespace,
+    *,
+    cite_key: str,
+    source_format: str,
+    source_path: str,
+    ticker: str,
+    filing_metadata: str,
+    paper_bank: Path,
+    vault_root: Path,
+    run_report_path: Path,
+) -> int:
+    """Execute the 10-K mode pipeline (proposal 07).
+
+    Steps: translate (PyMuPDF or translate_10k_html) -> segment_10k ->
+    catalog -> comprehend (3 parallel subagents) -> summarize (14-section
+    body + per-Item notes + claims sidecar) -> validate_10k_mode.
+    """
+    py = sys.executable
+    scripts = SCRIPTS_DIR
+    paper_bank.mkdir(parents=True, exist_ok=True)
+
+    if source_format not in ("pdf", "html", "text"):
+        print(
+            f"[run_pipeline] ERROR: 10-K mode requires --source-format in "
+            "{pdf, html, text} (got "
+            f"{source_format!r})",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Stage source into paper_bank/raw/.
+    try:
+        staged = _stage_simple_source(source_path, paper_bank)
+    except FileNotFoundError as exc:
+        print(f"[run_pipeline] ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    if source_format == "pdf":
+        translate_cmd = [
+            py,
+            str(scripts / "translate_paper.py"),
+            "--cite-key", cite_key,
+            "--paper-bank-dir", str(paper_bank),
+            "--format", "pdf",
+            "--force-pymupdf",  # 10-Ks from SEC EDGAR are born-digital
+        ]
+    elif source_format == "html":
+        translate_cmd = [
+            py,
+            str(scripts / "translate_10k_html.py"),
+            "--cite-key", cite_key,
+            "--input", str(staged),
+            "--output", str(paper_bank / "translated_full.md"),
+            "--paper-bank-dir", str(paper_bank),
+        ]
+    else:  # text
+        # Wrap plain-text sources as markdown and passthrough.
+        wrapped = paper_bank / "raw" / f"{staged.stem}.md"
+        wrapped.write_text(
+            f"# {cite_key}\n\n{staged.read_text(encoding='utf-8', errors='replace')}\n",
+            encoding="utf-8",
+        )
+        translate_cmd = [
+            py,
+            str(scripts / "translate_paper.py"),
+            "--cite-key", cite_key,
+            "--paper-bank-dir", str(paper_bank),
+            "--format", "markdown",
+        ]
+
+    segment_cmd = [
+        py,
+        str(scripts / "segment_10k.py"),
+        "--cite-key", cite_key,
+        "--source-path", str(paper_bank / "translated_full.md"),
+        "--output-dir", str(paper_bank / "segments"),
+    ]
+    comprehend_cmd = [
+        py,
+        str(scripts / "comprehend_paper.py"),
+        "--cite-key", cite_key,
+        "--paper-bank-root", str(paper_bank.parent),
+        "--skill-root", str(scripts.parent),
+        "--vault-root", str(vault_root),
+        "--mode", "10k",
+        "--ticker", ticker,
+    ]
+    summarize_cmd = [
+        py,
+        str(scripts / "summarize_paper.py"),
+        "--mode", "10k",
+        "--cite-key", cite_key,
+        "--ticker", ticker,
+        "--paper-bank-dir", str(paper_bank),
+        "--vault-path", str(vault_root),
+    ]
+    if filing_metadata:
+        summarize_cmd.extend(["--filing-metadata", filing_metadata])
+    validate_cmd = [
+        py,
+        str(scripts / "validate_10k_mode.py"),
+        "--cite-key", cite_key,
+        "--vault-root", str(vault_root),
+    ]
+
+    steps: list[tuple[str, list[str], bool]] = [
+        ("translate", translate_cmd, False),
+        ("segment_10k", segment_cmd, False),
+        ("comprehend", comprehend_cmd, True),
+        ("summarize", summarize_cmd, False),
+        ("validate", validate_cmd, True),
+    ]
+
+    results: list[dict] = []
+    pipeline_ok = True
+    for name, cmd, soft in steps:
+        print(f"[run_pipeline] -> {name} ...", file=sys.stderr)
+        result = _run_step(name, cmd, soft=soft)
+        results.append(result)
+        if result["status"] == "failed":
+            pipeline_ok = False
+            break
+
+    report = {
+        "schema_version": "v2",
+        "mode": "10k",
+        "cite_key": cite_key,
+        "ticker": ticker,
+        "source_format": source_format,
+        "source_path": source_path,
+        "paper_bank_dir": str(paper_bank),
+        "vault_root": str(vault_root),
+        "pipeline_status": "passed" if pipeline_ok else "failed",
+        "generated_at": _ts(),
+        "steps": results,
+    }
+    run_report_path.parent.mkdir(parents=True, exist_ok=True)
+    run_report_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(f"[run_pipeline] Run report written to {run_report_path}", file=sys.stderr)
+    return 0 if pipeline_ok else 1
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -739,10 +1068,44 @@ def main() -> int:
         "paper": "academic",
         "book": "institutional",
         "chain_map": "sell_side",
+        "simple": "hybrid",
+        "10k": "filing",
     }
     claim_domain = _MODE_CLAIM_DOMAIN[mode]
-    segment_source_dir: Path = _resolve_segment_source_dir(source_path)
     run_report_path: Path = Path(args.run_report_path)
+
+    # Simple mode (proposal 06) runs its own minimal pipeline: translate,
+    # single-subagent comprehend, validate. No catalog / segment / vault_write.
+    if mode == "simple":
+        return _run_simple_pipeline(
+            args,
+            cite_key=cite_key,
+            source_format=source_format,
+            source_path=source_path,
+            source_type=args.source_type,
+            paper_bank=paper_bank,
+            vault_root=vault_root,
+            run_report_path=run_report_path,
+        )
+
+    # 10-K mode (proposal 07) uses Item-boundary segmentation + 3-subagent
+    # comprehension + 14-section summary synthesis.
+    if mode == "10k":
+        return _run_10k_pipeline(
+            args,
+            cite_key=cite_key,
+            source_format=source_format,
+            source_path=source_path,
+            ticker=args.ticker,
+            filing_metadata=args.filing_metadata,
+            paper_bank=paper_bank,
+            vault_root=vault_root,
+            run_report_path=run_report_path,
+        )
+
+    segment_source_dir: Path = _resolve_segment_source_dir(
+        source_path, source_format=source_format, paper_bank=paper_bank
+    )
     checkpoint_path: Path = Path(args.checkpoint_path)
     if not checkpoint_path.is_absolute():
         checkpoint_path = run_report_path.parent / checkpoint_path

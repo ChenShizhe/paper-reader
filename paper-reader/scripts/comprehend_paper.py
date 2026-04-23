@@ -336,6 +336,440 @@ def _dispatch_chapter_with_retry(
     return slug, False, message
 
 
+# ---------------------------------------------------------------------------
+# Simple mode (proposal 06) — single-subagent comprehension over short content
+# ---------------------------------------------------------------------------
+
+_SIMPLE_MODE_SOURCE_TYPE_GUIDANCE: dict[str, str] = {
+    "primer": (
+        "A practitioner primer or methodology tutorial. Surface the method / "
+        "reading procedure the source teaches; extract step-by-step guidance "
+        "verbatim where possible. Limitations often understated — call them out."
+    ),
+    "rating-action": (
+        "A credit rating action press release. Surface the rating change, the "
+        "explicit drivers cited, and the outlook horizon. Distinguish observed "
+        "deterioration from forward-looking risk language."
+    ),
+    "sell-side-note": (
+        "A brokerage rating / price-target write-up. Surface the thesis, the "
+        "target framework (multiple / DCF / sum-of-parts), and the key "
+        "sensitivity assumptions. Flag whether the publisher has an explicit "
+        "position / relationship disclosure."
+    ),
+    "earnings-commentary": (
+        "Commentary on a recent earnings release. Surface the surprise vs. "
+        "consensus drivers, any guidance updates, and the analyst's read on "
+        "signal vs. noise."
+    ),
+    "industry-press": (
+        "A trade publication deep-dive. Surface the named players, technology / "
+        "product dynamics, and any quantified data points with their source "
+        "attribution."
+    ),
+    "regulatory-bulletin": (
+        "An investor-education bulletin from a regulator or standards body. "
+        "Surface the specific regulation or framework it addresses, the "
+        "canonical procedure recommended, and any named filings / frameworks it "
+        "cross-references."
+    ),
+    "short-academic-note": (
+        "A short academic write-up (opinion piece, commentary, case note). "
+        "Surface the claim, the supporting argument, and its relationship to "
+        "prior literature. Gap analysis matters — short notes tend to assert "
+        "without proving."
+    ),
+    "other": "Apply the 6-section schema strictly; use None. / None noted. where sections do not apply.",
+}
+
+
+def _build_simple_prompt(
+    cite_key: str,
+    source_type: str,
+    source_format: str,
+    translated_path: Path,
+    output_path: Path,
+) -> str:
+    """Build the single-subagent prompt for simple mode."""
+    source_text = translated_path.read_text(encoding="utf-8", errors="replace")
+    guidance = _SIMPLE_MODE_SOURCE_TYPE_GUIDANCE.get(
+        source_type, _SIMPLE_MODE_SOURCE_TYPE_GUIDANCE["other"]
+    )
+    word_count = len(source_text.split())
+    return f"""# Simple-Mode Reading Task
+
+## REQUIRED: Output Path
+Write the summary note to EXACTLY this path and nowhere else:
+  {output_path}
+
+## Source Metadata
+- cite_key: {cite_key}
+- source_type: {source_type}
+- source_format: {source_format}
+- word_count: approximately {word_count}
+
+## Source-Type Guidance
+{guidance}
+
+## Output Schema (all sections required, in order)
+
+```yaml
+---
+cite_key: {cite_key}
+source_type: {source_type}
+source_path: {translated_path}
+source_format: {source_format}
+date: <YYYY-MM-DD of writing>
+mode: simple
+word_count: <int, computed from the source>
+---
+```
+
+Followed by these six sections, in this order, with these exact headings:
+
+1. `## Overview` — 1–2 sentences. What the source is, who produced it, what question it addresses.
+2. `## Key Claims` — bulleted list. Each claim ends with `[anchor: <section heading or quoted phrase>]`.
+3. `## Methodology Guidance` — present if the source teaches a method / reading strategy / analytical procedure; otherwise the single line `None.`. Numbered steps or bullets.
+4. `## Verbatim Quotes` — up to three short quotes (≤ 3 sentences each) carrying the highest methodology or decision signal. Each with a `[anchor: ...]` tag.
+5. `## Cross-References` — mentions of other filings, frameworks, datasets, regulations, or named methods. Each as `<reference> — <why it matters>`.
+6. `## Gaps and Limitations` — what the source does not address; where arguments are hand-wavy or depend on unstated assumptions. Use `None noted.` only if genuinely thorough.
+
+Do not create any per-section subdirectories. Simple mode produces exactly one file.
+
+## Source Content
+
+{source_text}
+"""
+
+
+def _simple_run(args: argparse.Namespace) -> int:
+    """Simple mode (proposal 06): single-subagent comprehension of short content."""
+    paper_bank_root = Path(os.path.expanduser(args.paper_bank_root))
+    cite_key = args.cite_key
+    paper_dir = paper_bank_root / cite_key
+    vault_root = Path(os.path.expanduser(args.vault_root))
+
+    translated_path = paper_dir / "translated_full.md"
+    if not translated_path.exists():
+        print(
+            f"Error: translated_full.md not found at {translated_path}. "
+            "Run translate_paper.py first (simple mode expects markdown / html / pdf input).",
+            file=sys.stderr,
+        )
+        return 1
+
+    papers_dir = vault_root / "literature" / "papers"
+    if not papers_dir.exists():
+        papers_dir = vault_root / "papers"
+    papers_dir.mkdir(parents=True, exist_ok=True)
+    output_path = papers_dir / f"{cite_key}.md"
+
+    source_type = args.source_type or "other"
+    # Infer source_format from the translation manifest when possible.
+    manifest_path = paper_dir / "_translation_manifest.json"
+    source_format = "markdown"
+    if manifest_path.exists():
+        try:
+            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            source_format = str(manifest_data.get("source_format", "markdown"))
+        except Exception:
+            pass
+
+    prompt = _build_simple_prompt(
+        cite_key=cite_key,
+        source_type=source_type,
+        source_format=source_format,
+        translated_path=translated_path,
+        output_path=output_path,
+    )
+
+    try:
+        result = subprocess.run(
+            ["claude", "--print", prompt],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        print("Simple-mode subagent timed out after 600s.", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print("Simple-mode subagent: claude CLI not found on PATH.", file=sys.stderr)
+        return 1
+
+    if result.returncode != 0:
+        print(
+            f"Simple-mode subagent exited {result.returncode}: "
+            f"{result.stderr[:500]}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not output_path.exists():
+        print(
+            f"Simple-mode subagent exited 0 but did not write {output_path}.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Simple mode summary written to {output_path}", file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# 10-K mode (proposal 07) — 3-subagent comprehension of SEC Form 10-K filings
+# ---------------------------------------------------------------------------
+
+_FILING_CLAIM_TYPES: list[str] = [
+    "methodology",
+    "empirical",
+    "projection",
+    "limitation",
+    "data-availability",
+    "company-thesis",
+    "supply-chain-fact",
+]
+
+# 3-subagent partition (proposal 07 §§6.1–6.3).
+_10K_SUBAGENT_PARTITION: dict[str, dict] = {
+    "positioning": {
+        "items": ["1", "1A", "1C"],
+        "output_sections": [
+            "Company Snapshot",
+            "Business and Segments",
+            "Priority Risk Factors",
+        ],
+        "description": (
+            "Positioning and business comprehension. Read Items 1 (Business), "
+            "1A (Risk Factors), and 1C (Cybersecurity, where present). Surface "
+            "what drives profits, what drives future growth, how the company "
+            "organizes segments, and the top-ordered company-specific risks."
+        ),
+    },
+    "financial": {
+        "items": ["6", "7", "7A", "8"],
+        "output_sections": [
+            "MD&A Synthesis",
+            "Segment Performance",
+            "Financial Position",
+            "Cash Flow Quality",
+            "Notes Highlights",
+            "Non-GAAP and KPI Reconciliation",
+        ],
+        "description": (
+            "Financial-lens comprehension. Read Items 6 (Selected Financial Data, "
+            "when present), 7 (MD&A), 7A (Quantitative and Qualitative Market Risk "
+            "Disclosures), and 8 (Financial Statements and Footnotes). Surface the "
+            "period-over-period change narrative, segment-level performance, "
+            "balance-sheet composition, cash-flow quality, key footnote findings, "
+            "and non-GAAP / KPI reconciliation paths."
+        ),
+    },
+    "risk_forward": {
+        "items": ["9A", "9B"],
+        "output_sections": [
+            "Controls and Governance",
+            "Evolving-Topic Coverage",
+            "Forward-Looking Statements",
+        ],
+        "description": (
+            "Risk, controls, and forward-look comprehension. Read Items 9A "
+            "(Controls and Procedures), 9B (Other Information), and Part III "
+            "cross-references. Assess internal control material weakness status, "
+            "coverage of evolving topics (cybersecurity, AI materiality, climate, "
+            "geopolitical, supply chain, labor), and any forward-looking "
+            "statements across MD&A and Risk Factors."
+        ),
+    },
+}
+
+
+def _load_10k_segment_manifest(paper_dir: Path) -> dict:
+    manifest_path = paper_dir / "segments" / "_segment_manifest.json"
+    if not manifest_path.exists():
+        return {}
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _collect_item_segments(
+    paper_dir: Path, manifest: dict, item_numbers: list[str]
+) -> str:
+    """Concatenate segment bodies for the requested Items (blank when absent)."""
+    parts: list[str] = []
+    segments_dir = paper_dir / "segments"
+    by_number: dict[str, dict] = {
+        entry.get("item", ""): entry for entry in manifest.get("segments", [])
+    }
+    for number in item_numbers:
+        entry = by_number.get(number)
+        if not entry or entry.get("present") != "true":
+            continue
+        rel = entry.get("file", "")
+        path = paper_dir / rel if rel else segments_dir / f"item-{number}.md"
+        if path.exists():
+            parts.append(path.read_text(encoding="utf-8", errors="replace"))
+    return "\n\n".join(parts)
+
+
+def _build_10k_subagent_prompt(
+    *,
+    cite_key: str,
+    ticker: str,
+    subagent_key: str,
+    paper_dir: Path,
+    manifest: dict,
+    output_path: Path,
+) -> str:
+    spec = _10K_SUBAGENT_PARTITION[subagent_key]
+    source_text = _collect_item_segments(paper_dir, manifest, spec["items"])
+    sections_list = "\n".join(f"  - {s}" for s in spec["output_sections"])
+    items_list = ", ".join(f"Item {n}" for n in spec["items"])
+    return f"""# 10-K Reading Task — subagent: {subagent_key}
+
+## REQUIRED: Output Path
+Write a JSON file to EXACTLY this path and nowhere else:
+  {output_path}
+
+## Metadata
+- cite_key: {cite_key}
+- ticker: {ticker}
+- subagent: {subagent_key}
+- items_covered: {items_list}
+
+## Subagent description
+{spec["description"]}
+
+## Required output structure
+
+The JSON must be a single object with these fields:
+
+```json
+{{
+  "subagent": "{subagent_key}",
+  "items_read": ["..."],
+  "sections": {{
+{chr(10).join('    "' + s + '": "<prose markdown, at least a paragraph>",' for s in spec["output_sections"])}
+  }},
+  "claims": [
+    {{
+      "type": "company-thesis" | "empirical" | "projection" | "methodology" | "limitation" | "data-availability" | "supply-chain-fact",
+      "claim_text": "<verbatim or close-paraphrase>",
+      "source_anchor": {{
+        "source_type": "10-K Item",
+        "locator": "<N>-<subsection>",
+        "confidence": "high" | "medium" | "low"
+      }}
+    }}
+  ]
+}}
+```
+
+Permitted claim types: {", ".join(_FILING_CLAIM_TYPES)}. No others.
+
+## Source Items (verbatim from the filing)
+
+{source_text if source_text.strip() else "[No source Items are present for this subagent; emit an empty sections object and an empty claims list.]"}
+"""
+
+
+def _dispatch_10k_subagent(
+    *,
+    cite_key: str,
+    ticker: str,
+    subagent_key: str,
+    paper_dir: Path,
+    manifest: dict,
+) -> tuple[str, bool, str]:
+    output_path = paper_dir / f"_10k_{subagent_key}.json"
+    prompt = _build_10k_subagent_prompt(
+        cite_key=cite_key,
+        ticker=ticker,
+        subagent_key=subagent_key,
+        paper_dir=paper_dir,
+        manifest=manifest,
+        output_path=output_path,
+    )
+    try:
+        result = subprocess.run(
+            ["claude", "--print", prompt],
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        if result.returncode == 0 and output_path.exists():
+            return subagent_key, True, "ok"
+        if result.returncode == 0:
+            return subagent_key, False, f"subagent exited 0 but {output_path} not written"
+        return subagent_key, False, f"subagent exited {result.returncode}: {result.stderr[:300]}"
+    except subprocess.TimeoutExpired:
+        return subagent_key, False, "subagent timed out after 900s"
+    except FileNotFoundError:
+        return subagent_key, False, "claude CLI not found on PATH"
+    except Exception as exc:
+        return subagent_key, False, str(exc)
+
+
+def _10k_run(args: argparse.Namespace) -> int:
+    """10-K mode (proposal 07): 3-subagent comprehension over an Item-segmented 10-K."""
+    import concurrent.futures as _cf
+
+    paper_bank_root = Path(os.path.expanduser(args.paper_bank_root))
+    cite_key = args.cite_key
+    ticker = args.ticker or ""
+    paper_dir = paper_bank_root / cite_key
+
+    manifest = _load_10k_segment_manifest(paper_dir)
+    if not manifest or not manifest.get("segments"):
+        print(
+            f"ERROR: 10-K segment manifest not found or empty at {paper_dir}/segments/. "
+            "Run segment_10k.py before comprehend.",
+            file=sys.stderr,
+        )
+        return 1
+
+    results: dict[str, tuple[bool, str]] = {}
+    with _cf.ThreadPoolExecutor(max_workers=3) as executor:
+        future_to_key = {
+            executor.submit(
+                _dispatch_10k_subagent,
+                cite_key=cite_key,
+                ticker=ticker,
+                subagent_key=key,
+                paper_dir=paper_dir,
+                manifest=manifest,
+            ): key
+            for key in _10K_SUBAGENT_PARTITION
+        }
+        for future in _cf.as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                _, success, message = future.result()
+                results[key] = (success, message)
+                status = "OK" if success else "FAILED"
+                print(f"  {status}: 10-K subagent {key}: {message}", file=sys.stderr)
+            except Exception as exc:
+                results[key] = (False, str(exc))
+                print(f"  FAILED: 10-K subagent {key}: {exc}", file=sys.stderr)
+
+    failures = [k for k, (ok, _) in results.items() if not ok]
+    if failures:
+        print(
+            f"10-K mode completed with {len(failures)} subagent failure(s): {failures}. "
+            "Downstream summarize_paper.py will produce partial output.",
+            file=sys.stderr,
+        )
+        # Return 0 so the pipeline continues; summarize handles partial inputs.
+    else:
+        print(
+            "10-K mode: all 3 subagents completed successfully.",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def _chain_map_run(args: argparse.Namespace) -> int:
     """Chain-map mode: extract exhibit rows from translated_full.md and render report."""
     import exhibit_extractor as _ee
@@ -813,7 +1247,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         default="paper",
-        choices=["paper", "book", "chain_map"],
+        choices=["paper", "book", "chain_map", "simple", "10k"],
         help="Pipeline mode forwarded from run_pipeline (default: paper).",
     )
     parser.add_argument(
@@ -825,6 +1259,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--watchlist",
         default="",
         help="Path to watchlist file (forwarded from run_pipeline).",
+    )
+    parser.add_argument(
+        "--source-type",
+        default="",
+        help="Source type (simple mode only): primer, rating-action, sell-side-note, etc.",
+    )
+    parser.add_argument(
+        "--ticker",
+        default="",
+        help="Ticker symbol (10k mode only).",
     )
     parser.add_argument(
         "--book-concurrency",
@@ -844,6 +1288,10 @@ def main() -> None:
         sys.exit(_book_run(args))
     if args.mode == "chain_map":
         sys.exit(_chain_map_run(args))
+    if args.mode == "simple":
+        sys.exit(_simple_run(args))
+    if args.mode == "10k":
+        sys.exit(_10k_run(args))  # noqa: F821 — defined below in 10-K block
 
     if args.dry_run:
         sys.exit(_dry_run(args))
