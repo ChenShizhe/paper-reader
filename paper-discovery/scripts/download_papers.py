@@ -16,6 +16,38 @@ from pathlib import Path
 
 _PAPER_BANK = os.environ.get("PAPER_BANK", os.path.expanduser("~/Documents/paper-bank"))
 
+# Open-access fallback cascade (Unpaywall/OpenAlex/PMC/Europe PMC/arXiv). Imported
+# defensively: if its deps (requests/curl_cffi) are absent, the OA fallback is
+# simply disabled and the arXiv-only behavior is unchanged.
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import oa_fetch  # noqa: E402
+    _HAVE_OA = True
+except Exception:  # noqa: BLE001
+    _HAVE_OA = False
+
+
+def _try_oa_fallback(cite_key: str, title: str, raw_dir: Path) -> str | None:
+    """
+    Last-resort fetch for papers not retrievable from arXiv. Returns a
+    source_type string ('oa-pdf' or 'oa-jats-xml') on success (file written
+    into raw_dir), or None if no automated open-access route worked.
+    """
+    if not _HAVE_OA:
+        return None
+    try:
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        result = oa_fetch.acquire(doi=None, out_dir=str(raw_dir), name=cite_key,
+                                  email="shizhe.chen@gmail.com", title=title)
+    except Exception:  # noqa: BLE001
+        return None
+    fmt = result.get("format")
+    if fmt == "pdf":
+        return "oa-pdf"
+    if fmt == "jats_xml":
+        return "oa-jats-xml"
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Acquisition-list parsing / writing
@@ -234,12 +266,20 @@ def _process_paper(
 
     raw_dir = paper_bank / "paper-bank" / "raw" / cite_key
 
-    # (a) Missing arxiv_id — not on arXiv, route to manual download list
+    # (a) Missing arxiv_id — try the open-access cascade before routing to manual.
     if not arxiv_id:
-        print(f"  [{cite_key}] No arxiv_id — adding to manual download list.")
+        if not dry_run:
+            oa_type = _try_oa_fallback(cite_key, row["title"], raw_dir)
+            if oa_type:
+                print(f"  [{cite_key}] Open-access fallback succeeded ({oa_type}) → {raw_dir}")
+                _update_row_status(raw_lines, line_index, "downloaded")
+                _append_acquisition_log(log_path, cite_key, "", oa_type)
+                _update_manifest(manifest_path, cite_key, raw_dir, oa_type)
+                return "downloaded"
+        print(f"  [{cite_key}] No arxiv_id and no open-access copy — adding to manual download list.")
         if not dry_run:
             _update_row_status(raw_lines, line_index, "manual-pending")
-            _append_manual_download_list(manual_path, cite_key, "", row["title"], "arxiv_id blank")
+            _append_manual_download_list(manual_path, cite_key, "", row["title"], "arxiv_id blank; no OA")
         return "manual"
 
     # Already downloaded
@@ -259,10 +299,18 @@ def _process_paper(
         result = _download_with_backoff(arxiv_id)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            print(f"  [{cite_key}] arXiv returned 404 — not on arXiv. Adding to manual download list.")
+            if not dry_run:
+                oa_type = _try_oa_fallback(cite_key, row["title"], raw_dir)
+                if oa_type:
+                    print(f"  [{cite_key}] arXiv 404 but open-access fallback succeeded ({oa_type}) → {raw_dir}")
+                    _update_row_status(raw_lines, line_index, "downloaded")
+                    _append_acquisition_log(log_path, cite_key, arxiv_id, oa_type)
+                    _update_manifest(manifest_path, cite_key, raw_dir, oa_type)
+                    return "downloaded"
+            print(f"  [{cite_key}] arXiv returned 404 and no open-access copy. Adding to manual download list.")
             if not dry_run:
                 _update_row_status(raw_lines, line_index, "manual-pending")
-                _append_manual_download_list(manual_path, cite_key, arxiv_id, row["title"], "arXiv 404")
+                _append_manual_download_list(manual_path, cite_key, arxiv_id, row["title"], "arXiv 404; no OA")
             return "manual"
         reason = f"HTTP {exc.code}"
         print(f"  [{cite_key}] HTTP error {exc.code}. Marking failed.")
